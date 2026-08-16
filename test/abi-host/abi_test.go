@@ -123,6 +123,55 @@ future_field: preserved
 	}
 }
 
+func TestRuntimeRequestNormalizeDispatchesFullTransformRequest(t *testing.T) {
+	runtimeState := abi.NewRuntime()
+	_, registerStatus := runtimeState.Call(
+		abi.MethodPluginRegister,
+		lifecycleJSON(t, []byte("caveman_enabled: true\ncaveman_level: lite\nmodel_allowlist: [model-a]\n")),
+	)
+	if registerStatus != abi.CallStatusOK {
+		t.Fatalf("plugin.register status = %d", registerStatus)
+	}
+	body := []byte(`{"messages":[{"role":"user","content":"hello"}]}`)
+	rawRequest, errMarshal := json.Marshal(struct {
+		FromFormat string
+		ToFormat   string
+		Model      string
+		Stream     bool
+		Body       []byte
+	}{FromFormat: "openai", ToFormat: "openai", Model: "model-a", Stream: true, Body: body})
+	if errMarshal != nil {
+		t.Fatal(errMarshal)
+	}
+
+	raw, status := runtimeState.Call(abi.MethodRequestNormalize, rawRequest)
+	if status != abi.CallStatusOK {
+		t.Fatalf("request.normalize status = %d, envelope = %s", status, raw)
+	}
+	var response struct{ Body []byte }
+	envelope := decodeEnvelope(t, raw)
+	if !envelope.OK {
+		t.Fatalf("request.normalize envelope = %#v", envelope)
+	}
+	if errDecode := json.Unmarshal(envelope.Result, &response); errDecode != nil {
+		t.Fatal(errDecode)
+	}
+	if !bytes.Contains(response.Body, []byte("CPA_TOKEN_SAVER_CAVEMAN_START")) {
+		t.Fatalf("request.normalize did not dispatch the full request: %s", response.Body)
+	}
+
+	malformedRequest, _ := json.Marshal(struct {
+		FromFormat string
+		ToFormat   string
+		Model      string
+		Body       []byte
+	}{FromFormat: "openai", ToFormat: "openai", Model: "model-a", Body: []byte(`{"messages":`)})
+	failOpenRaw, failOpenStatus := runtimeState.Call(abi.MethodRequestNormalize, malformedRequest)
+	if failOpenStatus != abi.CallStatusOK {
+		t.Fatalf("recoverable normalize failure status = %d, envelope = %s", failOpenStatus, failOpenRaw)
+	}
+}
+
 func TestInvalidColdRegistrationStaysRegisteredSafeOff(t *testing.T) {
 	runtimeState := abi.NewRuntime()
 	raw, status := runtimeState.Call(

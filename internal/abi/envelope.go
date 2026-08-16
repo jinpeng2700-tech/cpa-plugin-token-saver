@@ -2,12 +2,14 @@
 package abi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
 	"sync/atomic"
 
 	"github.com/router-for-me/cpa-plugin-token-saver/internal/config"
+	"github.com/router-for-me/cpa-plugin-token-saver/internal/saver"
 )
 
 const (
@@ -97,16 +99,18 @@ type managementRegistration struct {
 // and native allocation happen outside Call, so panic recovery here is limited
 // to recoverable Go dispatch failures rather than unsafe-memory faults.
 type Runtime struct {
-	mu      sync.Mutex
-	cond    *sync.Cond
-	active  int
-	stopped bool
-	configs atomic.Pointer[config.Store]
+	mu          sync.Mutex
+	cond        *sync.Cond
+	active      int
+	stopped     bool
+	lifecycleMu sync.Mutex
+	configs     atomic.Pointer[config.Store]
+	saver       *saver.Service
 }
 
 // NewRuntime creates a running runtime with a safe-off configuration snapshot.
 func NewRuntime() *Runtime {
-	runtime := &Runtime{}
+	runtime := &Runtime{saver: saver.NewService(saver.Options{})}
 	runtime.cond = sync.NewCond(&runtime.mu)
 	store, _ := config.NewStore(nil)
 	runtime.configs.Store(store)
@@ -143,6 +147,9 @@ func (r *Runtime) Shutdown() {
 		r.cond.Wait()
 	}
 	r.mu.Unlock()
+	if r.saver != nil {
+		r.saver.Close()
+	}
 }
 
 // Stopped reports whether shutdown has begun.
@@ -196,11 +203,15 @@ func (r *Runtime) dispatch(method string, request []byte) ([]byte, int) {
 	case MethodPluginReconfigure:
 		return r.reconfigure(request)
 	case MethodRequestNormalize:
-		var input payloadResponse
+		var input saver.Request
 		if errDecode := json.Unmarshal(request, &input); errDecode != nil {
 			return Failure("invalid_request", "decode request.normalize: "+errDecode.Error()), CallStatusError
 		}
-		return Success(payloadResponse{Body: append([]byte(nil), input.Body...)}), CallStatusOK
+		body := input.Body
+		if r.saver != nil {
+			body = r.saver.Normalize(context.Background(), input)
+		}
+		return Success(payloadResponse{Body: body}), CallStatusOK
 	case MethodManagementRegister:
 		return Success(managementRegistration{
 			Routes:    []json.RawMessage{},
@@ -214,29 +225,40 @@ func (r *Runtime) dispatch(method string, request []byte) ([]byte, int) {
 }
 
 func (r *Runtime) register(raw []byte) ([]byte, int) {
+	r.lifecycleMu.Lock()
+	defer r.lifecycleMu.Unlock()
 	request, errDecode := decodeLifecycleRequest(raw)
 	if errDecode != nil {
 		return Failure("invalid_request", errDecode.Error()), CallStatusError
 	}
 	store, _ := config.NewStore(request.ConfigYAML)
 	// A bad cold configuration deliberately registers with safe-off defaults.
+	if r.saver != nil {
+		if errConfigure := r.saver.Reconfigure(store.Snapshot()); errConfigure != nil {
+			return Failure("invalid_config", "configure token saver runtime"), CallStatusError
+		}
+	}
 	r.configs.Store(store)
 	return Success(pluginRegistration()), CallStatusOK
 }
 
 func (r *Runtime) reconfigure(raw []byte) ([]byte, int) {
+	r.lifecycleMu.Lock()
+	defer r.lifecycleMu.Unlock()
 	request, errDecode := decodeLifecycleRequest(raw)
 	if errDecode != nil {
 		return Failure("invalid_request", errDecode.Error()), CallStatusError
 	}
-	store := r.configs.Load()
-	if store == nil {
-		store, _ = config.NewStore(nil)
-		r.configs.Store(store)
+	nextStore, errConfig := config.NewStore(request.ConfigYAML)
+	if errConfig != nil {
+		return Failure("invalid_config", errConfig.Error()), CallStatusError
 	}
-	if errReload := store.Reload(request.ConfigYAML); errReload != nil {
-		return Failure("invalid_config", errReload.Error()), CallStatusError
+	if r.saver != nil {
+		if errConfigure := r.saver.Reconfigure(nextStore.Snapshot()); errConfigure != nil {
+			return Failure("invalid_config", "configure token saver runtime"), CallStatusError
+		}
 	}
+	r.configs.Store(nextStore)
 	return Success(pluginRegistration()), CallStatusOK
 }
 
