@@ -37,6 +37,17 @@ type HeadroomRunner interface {
 	Apply(context.Context, []byte, Request) ([]byte, headroom.Outcome)
 }
 
+type headroomStatusRunner interface {
+	Probe(context.Context) headroom.Outcome
+	CircuitState() headroom.CircuitState
+}
+
+// HeadroomStatus is a fixed dependency projection for management health.
+type HeadroomStatus struct {
+	Effective bool
+	Circuit   headroom.CircuitState
+}
+
 // HeadroomFactory constructs one generation-scoped runner and idle-connection closer.
 type HeadroomFactory func(config.Config) (HeadroomRunner, func(), error)
 
@@ -247,6 +258,53 @@ func (service *Service) Generation() uint64 {
 	return service.current.generation
 }
 
+// HeadroomStatus probes the current generation without exposing configuration
+// or counting the management probe as a provider request in-flight.
+func (service *Service) HeadroomStatus(ctx context.Context) HeadroomStatus {
+	if service == nil {
+		return HeadroomStatus{}
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	service.mu.Lock()
+	if service.closed || service.current == nil {
+		service.mu.Unlock()
+		return HeadroomStatus{}
+	}
+	state := service.current
+	desired := state.config.HeadroomEnabled
+	if !desired {
+		service.mu.Unlock()
+		return HeadroomStatus{Circuit: headroom.CircuitClosed}
+	}
+	state.inflight++
+	runner, observable := state.headroom.(headroomStatusRunner)
+	service.mu.Unlock()
+	defer service.releaseStatusState(state)
+	if !observable || runner == nil {
+		return HeadroomStatus{Circuit: headroom.CircuitClosed}
+	}
+	outcome := runner.Probe(ctx)
+	circuit := runner.CircuitState()
+	return HeadroomStatus{
+		Effective: (outcome == headroom.OutcomeApplied || outcome == headroom.OutcomeNoChange) && circuit == headroom.CircuitClosed,
+		Circuit:   circuit,
+	}
+}
+
+func (service *Service) releaseStatusState(state *generationState) {
+	service.mu.Lock()
+	if state != nil && state.inflight > 0 {
+		state.inflight--
+	}
+	closer := closableLocked(state)
+	service.mu.Unlock()
+	if closer != nil {
+		closer()
+	}
+}
+
 // Close retires the current client. In-flight generations close only after release.
 func (service *Service) Close() {
 	if service == nil {
@@ -407,10 +465,19 @@ func metricForHeadroom(outcome headroom.Outcome, input, output []byte) metrics.O
 
 type adapterRunner struct {
 	adapter *headroom.Adapter
+	client  *headroom.Client
 }
 
 func (runner adapterRunner) Apply(ctx context.Context, body []byte, request Request) ([]byte, headroom.Outcome) {
 	return runner.adapter.Apply(ctx, body, request.pair(), request.Model)
+}
+
+func (runner adapterRunner) Probe(ctx context.Context) headroom.Outcome {
+	return runner.client.Probe(ctx)
+}
+
+func (runner adapterRunner) CircuitState() headroom.CircuitState {
+	return runner.client.CircuitState()
 }
 
 func defaultHeadroomFactory(cfg config.Config) (HeadroomRunner, func(), error) {
@@ -418,7 +485,7 @@ func defaultHeadroomFactory(cfg config.Config) (HeadroomRunner, func(), error) {
 	if errClient != nil {
 		return nil, nil, errClient
 	}
-	return adapterRunner{adapter: headroom.NewAdapter(client)}, client.CloseIdleConnections, nil
+	return adapterRunner{adapter: headroom.NewAdapter(client), client: client}, client.CloseIdleConnections, nil
 }
 
 func (request Request) pair() protocol.Pair {

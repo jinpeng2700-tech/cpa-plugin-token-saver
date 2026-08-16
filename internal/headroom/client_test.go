@@ -208,6 +208,9 @@ func TestClientSaturationIsImmediateAndDoesNotQueue(t *testing.T) {
 	client := mustClient(t, "http://127.0.0.1:8787", time.Second)
 	client.httpClient.Transport = transport
 	defer client.CloseIdleConnections()
+	if got := client.CircuitState(); got != CircuitClosed {
+		t.Fatalf("initial circuit state = %q", got)
+	}
 
 	firstDone := make(chan Outcome, 1)
 	go func() {
@@ -260,20 +263,32 @@ func TestClientCircuitOpenAndSingleHalfOpenProbe(t *testing.T) {
 	if got := client.Compress(context.Background(), validCompressRequest, acceptAnyMessages); got != OutcomeCircuitOpen {
 		t.Fatalf("open outcome = %q", got)
 	}
+	if got := client.CircuitState(); got != CircuitOpen {
+		t.Fatalf("open circuit state = %q", got)
+	}
 
 	clock.Advance(circuitOpenDuration)
+	if got := client.CircuitState(); got != CircuitHalfOpen {
+		t.Fatalf("eligible half-open circuit state = %q", got)
+	}
 	mode.Store(1)
 	probeDone := make(chan Outcome, 1)
 	go func() {
 		probeDone <- client.Compress(context.Background(), validCompressRequest, acceptAnyMessages)
 	}()
 	<-probeStarted
+	if got := client.CircuitState(); got != CircuitHalfOpen {
+		t.Fatalf("in-flight half-open circuit state = %q", got)
+	}
 	if got := client.Compress(context.Background(), validCompressRequest, acceptAnyMessages); got != OutcomeCircuitOpen {
 		t.Fatalf("parallel half-open outcome = %q", got)
 	}
 	close(probeRelease)
 	if got := <-probeDone; got != OutcomeApplied {
 		t.Fatalf("probe outcome = %q", got)
+	}
+	if got := client.CircuitState(); got != CircuitClosed {
+		t.Fatalf("closed circuit state after probe = %q", got)
 	}
 
 	mode.Store(2)

@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/router-for-me/cpa-plugin-token-saver/internal/config"
+	"github.com/router-for-me/cpa-plugin-token-saver/internal/management"
 	"github.com/router-for-me/cpa-plugin-token-saver/internal/saver"
 )
 
@@ -24,6 +25,7 @@ const (
 	MethodPluginShutdown     = "plugin.shutdown"
 	MethodRequestNormalize   = "request.normalize"
 	MethodManagementRegister = "management.register"
+	MethodManagementHandle   = "management.handle"
 )
 
 const (
@@ -90,11 +92,6 @@ type payloadResponse struct {
 	Body []byte
 }
 
-type managementRegistration struct {
-	Routes    []json.RawMessage `json:"routes"`
-	Resources []json.RawMessage `json:"resources"`
-}
-
 // Runtime serializes shutdown against active pure-Go dispatch. Pointer copying
 // and native allocation happen outside Call, so panic recovery here is limited
 // to recoverable Go dispatch failures rather than unsafe-memory faults.
@@ -106,6 +103,7 @@ type Runtime struct {
 	lifecycleMu sync.Mutex
 	configs     atomic.Pointer[config.Store]
 	saver       *saver.Service
+	management  *management.Handler
 }
 
 // NewRuntime creates a running runtime with a safe-off configuration snapshot.
@@ -114,6 +112,13 @@ func NewRuntime() *Runtime {
 	runtime.cond = sync.NewCond(&runtime.mu)
 	store, _ := config.NewStore(nil)
 	runtime.configs.Store(store)
+	runtime.management = management.NewHandler(management.Options{
+		BuildVersion:   PluginVersion,
+		ABIVersion:     ABIVersion,
+		RPCSchema:      RPCSchemaVersion,
+		Saver:          runtime.saver,
+		ConfigSnapshot: runtime.configs.Load,
+	})
 	return runtime
 }
 
@@ -213,10 +218,22 @@ func (r *Runtime) dispatch(method string, request []byte) ([]byte, int) {
 		}
 		return Success(payloadResponse{Body: body}), CallStatusOK
 	case MethodManagementRegister:
-		return Success(managementRegistration{
-			Routes:    []json.RawMessage{},
-			Resources: []json.RawMessage{},
-		}), CallStatusOK
+		if r.management == nil {
+			return Failure("runtime_unavailable", "management runtime is unavailable"), CallStatusError
+		}
+		return Success(r.management.Registration()), CallStatusOK
+	case MethodManagementHandle:
+		var input management.Request
+		if errDecode := json.Unmarshal(request, &input); errDecode != nil {
+			return Failure("invalid_request", "management request is invalid"), CallStatusError
+		}
+		if r.management == nil {
+			return Failure("runtime_unavailable", "management runtime is unavailable"), CallStatusError
+		}
+		r.lifecycleMu.Lock()
+		defer r.lifecycleMu.Unlock()
+		response := r.management.Handle(context.Background(), input)
+		return Success(response), CallStatusOK
 	case MethodPluginShutdown:
 		return Failure("unsupported_method", "plugin.shutdown must use the native shutdown function"), CallStatusError
 	default:
@@ -251,7 +268,7 @@ func (r *Runtime) reconfigure(raw []byte) ([]byte, int) {
 	}
 	nextStore, errConfig := config.NewStore(request.ConfigYAML)
 	if errConfig != nil {
-		return Failure("invalid_config", errConfig.Error()), CallStatusError
+		return Failure("invalid_config", "configuration is invalid"), CallStatusError
 	}
 	if r.saver != nil {
 		if errConfigure := r.saver.Reconfigure(nextStore.Snapshot()); errConfigure != nil {

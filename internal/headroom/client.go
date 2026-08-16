@@ -54,6 +54,15 @@ const (
 	OutcomeInvalidResponse      Outcome = "fail_invalid_response"
 )
 
+// CircuitState is a fixed, low-cardinality view of the Headroom breaker.
+type CircuitState string
+
+const (
+	CircuitClosed   CircuitState = "closed"
+	CircuitOpen     CircuitState = "open"
+	CircuitHalfOpen CircuitState = "half_open"
+)
+
 type dialContextFunc func(context.Context, string, string) (net.Conn, error)
 
 type clientOptions struct {
@@ -116,6 +125,15 @@ func (client *Client) Probe(ctx context.Context) Outcome {
 		client.probeValue = outcome
 	}
 	return outcome
+}
+
+// CircuitState returns a read-only snapshot without exposing endpoint or
+// failure details.
+func (client *Client) CircuitState() CircuitState {
+	if client == nil {
+		return CircuitOpen
+	}
+	return client.circuit.state(client.now())
 }
 
 // NewClient constructs a client bound to one literal loopback base URL. The
@@ -386,6 +404,18 @@ type circuitBreaker struct {
 	failures            []time.Time
 	openUntil           time.Time
 	halfOpenInFlight    bool
+}
+
+func (breaker *circuitBreaker) state(now time.Time) CircuitState {
+	breaker.mu.Lock()
+	defer breaker.mu.Unlock()
+	if breaker.openUntil.IsZero() {
+		return CircuitClosed
+	}
+	if breaker.halfOpenInFlight || !now.Before(breaker.openUntil) {
+		return CircuitHalfOpen
+	}
+	return CircuitOpen
 }
 
 func (breaker *circuitBreaker) begin(now time.Time) (bool, bool) {

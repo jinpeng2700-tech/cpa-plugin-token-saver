@@ -118,8 +118,116 @@ future_field: preserved
 	if errDecode := json.Unmarshal(managementEnvelope.Result, &management); errDecode != nil {
 		t.Fatalf("decode management registration: %v", errDecode)
 	}
-	if management.Routes == nil || management.Resources == nil || len(management.Routes) != 0 || len(management.Resources) != 0 {
-		t.Fatalf("management registration = %#v, want explicit empty lists", management)
+	if management.Routes == nil || management.Resources == nil || len(management.Routes) != 2 || len(management.Resources) != 0 {
+		t.Fatalf("management registration = %#v, want two authenticated routes and explicit empty resources", management)
+	}
+}
+
+func TestRuntimeManagementUsesRealHostFieldNamesAndBase64Bodies(t *testing.T) {
+	runtimeState := abi.NewRuntime()
+	_, registerStatus := runtimeState.Call(abi.MethodPluginRegister, lifecycleJSON(t, nil))
+	if registerStatus != abi.CallStatusOK {
+		t.Fatalf("plugin.register status = %d", registerStatus)
+	}
+
+	rawRegistration, registrationStatus := runtimeState.Call(abi.MethodManagementRegister, []byte(`{"BasePath":"/v0/management"}`))
+	if registrationStatus != abi.CallStatusOK {
+		t.Fatalf("management.register status = %d, envelope = %s", registrationStatus, rawRegistration)
+	}
+	registrationEnvelope := decodeEnvelope(t, rawRegistration)
+	for _, want := range [][]byte{
+		[]byte(`"routes"`), []byte(`"resources"`), []byte(`"Method":"GET"`),
+		[]byte(`"Path":"/plugins/token-saver/status"`), []byte(`"Method":"POST"`),
+		[]byte(`"Path":"/plugins/token-saver/self-test"`),
+	} {
+		if !bytes.Contains(registrationEnvelope.Result, want) {
+			t.Errorf("management.register result %s missing %s", registrationEnvelope.Result, want)
+		}
+	}
+	for _, forbidden := range [][]byte{[]byte(`"method"`), []byte(`"path"`), []byte(`"Handler"`), []byte(`"Menu"`)} {
+		if bytes.Contains(registrationEnvelope.Result, forbidden) {
+			t.Errorf("management.register result %s contains %s", registrationEnvelope.Result, forbidden)
+		}
+	}
+
+	hostRequest := []byte(`{"Method":"GET","Path":"/v0/management/plugins/token-saver/status","Headers":{"Authorization":["TOP_SECRET_SENTINEL"]},"Query":{"raw":["TOP_SECRET_SENTINEL"]},"Body":"VE9QX1NFQ1JFVF9TRU5USU5FTA==","host_callback_id":"callback-1"}`)
+	rawHandle, handleStatus := runtimeState.Call(abi.MethodManagementHandle, hostRequest)
+	if handleStatus != abi.CallStatusOK {
+		t.Fatalf("management.handle status = %d, envelope = %s", handleStatus, rawHandle)
+	}
+	handleEnvelope := decodeEnvelope(t, rawHandle)
+	for _, want := range [][]byte{[]byte(`"StatusCode":200`), []byte(`"Headers"`), []byte(`"Body":"`)} {
+		if !bytes.Contains(handleEnvelope.Result, want) {
+			t.Errorf("management.handle result %s missing %s", handleEnvelope.Result, want)
+		}
+	}
+	if bytes.Contains(handleEnvelope.Result, []byte("TOP_SECRET_SENTINEL")) {
+		t.Fatalf("management response leaked request data: %s", handleEnvelope.Result)
+	}
+	var response struct {
+		StatusCode int
+		Headers    map[string][]string
+		Body       []byte
+	}
+	if errDecode := json.Unmarshal(handleEnvelope.Result, &response); errDecode != nil {
+		t.Fatal(errDecode)
+	}
+	if response.StatusCode != 200 || !json.Valid(response.Body) || response.Headers["Content-Type"][0] != "application/json" {
+		t.Fatalf("management response = %#v body=%s", response, response.Body)
+	}
+
+	invalidRaw, invalidStatus := runtimeState.Call(
+		abi.MethodPluginReconfigure,
+		lifecycleJSON(t, []byte("headroom_url: http://TOP_SECRET_INVALID.example\n")),
+	)
+	if invalidStatus != abi.CallStatusError || bytes.Contains(invalidRaw, []byte("TOP_SECRET_INVALID")) {
+		t.Fatalf("invalid reconfigure status/envelope = %d/%s", invalidStatus, invalidRaw)
+	}
+	invalidEnvelope := decodeEnvelope(t, invalidRaw)
+	if invalidEnvelope.Error == nil || invalidEnvelope.Error.Code != "invalid_config" || invalidEnvelope.Error.Message != "configuration is invalid" {
+		t.Fatalf("invalid reconfigure envelope = %#v", invalidEnvelope)
+	}
+	rawAfter, afterStatus := runtimeState.Call(abi.MethodManagementHandle, hostRequest)
+	if afterStatus != abi.CallStatusOK {
+		t.Fatalf("post-invalid management.handle status = %d, envelope = %s", afterStatus, rawAfter)
+	}
+	afterEnvelope := decodeEnvelope(t, rawAfter)
+	var afterResponse struct{ Body []byte }
+	if errDecode := json.Unmarshal(afterEnvelope.Result, &afterResponse); errDecode != nil {
+		t.Fatal(errDecode)
+	}
+	if !bytes.Equal(afterResponse.Body, response.Body) {
+		t.Fatalf("invalid hot reload changed LKG status:\nbefore=%s\nafter=%s", response.Body, afterResponse.Body)
+	}
+}
+
+func TestInvalidColdRegistrationPublishesSafeOffConfigErrorStatus(t *testing.T) {
+	runtimeState := abi.NewRuntime()
+	rawRegister, registerStatus := runtimeState.Call(
+		abi.MethodPluginRegister,
+		lifecycleJSON(t, []byte("rtk_enabled: true\nheadroom_url: http://TOP_SECRET_INVALID.example\n")),
+	)
+	if registerStatus != abi.CallStatusOK || !decodeEnvelope(t, rawRegister).OK {
+		t.Fatalf("invalid cold registration status/envelope = %d/%s", registerStatus, rawRegister)
+	}
+	rawStatus, statusCode := runtimeState.Call(abi.MethodManagementHandle, []byte(`{"Method":"GET","Path":"/v0/management/plugins/token-saver/status"}`))
+	if statusCode != abi.CallStatusOK {
+		t.Fatalf("management.handle status = %d, envelope = %s", statusCode, rawStatus)
+	}
+	envelope := decodeEnvelope(t, rawStatus)
+	var response struct {
+		Body []byte
+	}
+	if errDecode := json.Unmarshal(envelope.Result, &response); errDecode != nil {
+		t.Fatal(errDecode)
+	}
+	if !bytes.Contains(response.Body, []byte(`"config":"config_error"`)) || !bytes.Contains(response.Body, []byte(`"config_generation":1`)) ||
+		!bytes.Contains(response.Body, []byte(`"config_digest":"2446d6019932b9bcade78655430e0befd195fbe272eb2c4c05a89889d5968f1d"`)) ||
+		!bytes.Contains(response.Body, []byte(`"pipeline":"all_bypassed"`)) {
+		t.Fatalf("cold-invalid status body = %s", response.Body)
+	}
+	if bytes.Contains(response.Body, []byte("TOP_SECRET_INVALID")) {
+		t.Fatalf("cold-invalid status leaked configuration: %s", response.Body)
 	}
 }
 
@@ -277,7 +385,8 @@ func TestDynamicABIHostSubprocess(t *testing.T) {
 		ABIVersion              uint32 `json:"abi_version"`
 		RegistrationOK          bool   `json:"registration_ok"`
 		NormalizeByteIdentical  bool   `json:"normalize_byte_identical"`
-		ManagementListsEmpty    bool   `json:"management_lists_empty"`
+		ManagementRoutesOK      bool   `json:"management_routes_ok"`
+		ManagementHandleOK      bool   `json:"management_handle_ok"`
 		OutstandingSurvivedStop bool   `json:"outstanding_survived_shutdown"`
 		PostShutdownCode        string `json:"post_shutdown_code"`
 	}
@@ -285,7 +394,7 @@ func TestDynamicABIHostSubprocess(t *testing.T) {
 		t.Fatalf("decode ABI host report: %v\n%s", errDecode, output)
 	}
 	if report.ABIVersion != abi.ABIVersion || !report.RegistrationOK || !report.NormalizeByteIdentical ||
-		!report.ManagementListsEmpty || !report.OutstandingSurvivedStop || report.PostShutdownCode != "plugin_shutdown" {
+		!report.ManagementRoutesOK || !report.ManagementHandleOK || !report.OutstandingSurvivedStop || report.PostShutdownCode != "plugin_shutdown" {
 		t.Fatalf("ABI host report = %#v", report)
 	}
 }

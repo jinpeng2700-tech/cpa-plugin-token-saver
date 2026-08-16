@@ -113,6 +113,73 @@ func TestReloadInvalidConfigKeepsLastKnownGoodSnapshot(t *testing.T) {
 	}
 }
 
+func TestStoreValidityAndCanonicalDigest(t *testing.T) {
+	wantCanonical := `{"rtk_enabled":false,"headroom_enabled":false,"headroom_url":"http://127.0.0.1:8787","headroom_timeout_ms":1500,"caveman_enabled":false,"caveman_level":"full","ponytail_enabled":false,"ponytail_level":"full","model_allowlist":[]}`
+	if got := string(CanonicalJSON(Defaults())); got != wantCanonical {
+		t.Fatalf("canonical defaults = %q, want %q", got, wantCanonical)
+	}
+	invalid, errInvalid := NewStore([]byte("headroom_url: https://secret.invalid\n"))
+	if errInvalid == nil {
+		t.Fatal("invalid cold configuration error = nil")
+	}
+	invalidSnapshot, invalidValid, invalidDigest := invalid.StatusSnapshot()
+	if invalidValid {
+		t.Fatal("invalid cold configuration reported valid")
+	}
+	if invalidValid || !reflect.DeepEqual(invalidSnapshot, Defaults()) {
+		t.Fatalf("invalid cold atomic state = valid:%t config:%#v", invalidValid, invalidSnapshot)
+	}
+	if got, want := invalidDigest, "2446d6019932b9bcade78655430e0befd195fbe272eb2c4c05a89889d5968f1d"; got != want {
+		t.Fatalf("safe-off digest = %q, want %q", got, want)
+	}
+
+	first, errFirst := NewStore([]byte("caveman_level: full\nrtk_enabled: true\nmodel_allowlist: [model-a, model-b]\nfuture_credential: TOP_SECRET_SENTINEL\n"))
+	firstStatus, firstValid, _ := first.StatusSnapshot()
+	if errFirst != nil || !firstValid {
+		t.Fatalf("valid store = valid:%t error:%v", firstValid, errFirst)
+	}
+	if firstStatus.RawYAML != nil {
+		t.Fatal("status snapshot copied preserved RawYAML")
+	}
+	second, errSecond := NewStore([]byte("model_allowlist: [model-a, model-b]\nrtk_enabled: true\ncaveman_level: full\n"))
+	if errSecond != nil {
+		t.Fatal(errSecond)
+	}
+	if Digest(first.Snapshot()) != Digest(second.Snapshot()) {
+		t.Fatalf("semantically equal configurations have different digests: %s/%s", Digest(first.Snapshot()), Digest(second.Snapshot()))
+	}
+	if bytes.Contains(CanonicalJSON(first.Snapshot()), []byte("TOP_SECRET_SENTINEL")) {
+		t.Fatal("canonical configuration included RawYAML or an unknown field")
+	}
+	wantDigest := Digest(first.Snapshot())
+	if errReload := first.Reload([]byte("rtk_enabled: not-a-bool\n")); errReload == nil {
+		t.Fatal("invalid hot reload error = nil")
+	}
+	_, firstValid, firstDigest := first.StatusSnapshot()
+	if !firstValid || firstDigest != wantDigest {
+		t.Fatal("invalid hot reload changed last-known-good validity or digest")
+	}
+
+	reorderedAllowlist, errReordered := NewStore([]byte("rtk_enabled: true\nmodel_allowlist: [model-b, model-a]\n"))
+	if errReordered != nil {
+		t.Fatal(errReordered)
+	}
+	if Digest(reorderedAllowlist.Snapshot()) == wantDigest {
+		t.Fatal("model_allowlist order did not participate in canonical digest")
+	}
+
+	crossLanguage := Defaults()
+	crossLanguage.RTKEnabled = true
+	crossLanguage.ModelAllowlist = []string{"model-a", "模型<&"}
+	wantCrossLanguageJSON := `{"rtk_enabled":true,"headroom_enabled":false,"headroom_url":"http://127.0.0.1:8787","headroom_timeout_ms":1500,"caveman_enabled":false,"caveman_level":"full","ponytail_enabled":false,"ponytail_level":"full","model_allowlist":["model-a","模型<&"]}`
+	if got := string(CanonicalJSON(crossLanguage)); got != wantCrossLanguageJSON {
+		t.Fatalf("cross-language canonical JSON = %q, want %q", got, wantCrossLanguageJSON)
+	}
+	if got, want := Digest(crossLanguage), "e44c2b9fa4674b77d0e81001e2fc6e14981bb92ec1e9e928e2f4f1e19a0fc04c"; got != want {
+		t.Fatalf("cross-language digest = %q, want %q", got, want)
+	}
+}
+
 func TestReloadPublishesIndependentSnapshotsConcurrently(t *testing.T) {
 	store, err := NewStore(nil)
 	if err != nil {

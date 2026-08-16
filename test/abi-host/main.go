@@ -66,7 +66,8 @@ type hostReport struct {
 	ABIVersion              uint32 `json:"abi_version"`
 	RegistrationOK          bool   `json:"registration_ok"`
 	NormalizeByteIdentical  bool   `json:"normalize_byte_identical"`
-	ManagementListsEmpty    bool   `json:"management_lists_empty"`
+	ManagementRoutesOK      bool   `json:"management_routes_ok"`
+	ManagementHandleOK      bool   `json:"management_handle_ok"`
 	OutstandingSurvivedStop bool   `json:"outstanding_survived_shutdown"`
 	PostShutdownCode        string `json:"post_shutdown_code"`
 }
@@ -144,6 +145,37 @@ func runHost(path string) (hostReport, error) {
 	}
 	_ = json.Unmarshal(managementRaw, &managementEnvelope)
 	_ = json.Unmarshal(managementEnvelope.Result, &managementResult)
+	managementRoutesOK := managementRC == 0 && managementEnvelope.OK && len(managementResult.Routes) == 2 && len(managementResult.Resources) == 0 &&
+		bytes.Contains(managementEnvelope.Result, []byte(`"Method":"GET"`)) && bytes.Contains(managementEnvelope.Result, []byte(`"Path":"/plugins/token-saver/status"`)) &&
+		bytes.Contains(managementEnvelope.Result, []byte(`"Method":"POST"`)) && bytes.Contains(managementEnvelope.Result, []byte(`"Path":"/plugins/token-saver/self-test"`))
+
+	managementRequest, _ := json.Marshal(struct {
+		Method  string
+		Path    string
+		Headers map[string][]string
+		Query   map[string][]string
+		Body    []byte
+	}{
+		Method:  "GET",
+		Path:    "/v0/management/plugins/token-saver/status",
+		Headers: map[string][]string{"Authorization": {"TOP_SECRET_SENTINEL"}},
+		Query:   map[string][]string{"raw": {"TOP_SECRET_SENTINEL"}},
+		Body:    []byte("TOP_SECRET_SENTINEL"),
+	})
+	managementHandleRaw, managementHandleRC, errManagementHandle := callAndFree(&plugin, abi.MethodManagementHandle, managementRequest, false)
+	if errManagementHandle != nil {
+		return hostReport{}, errManagementHandle
+	}
+	var managementHandleEnvelope abi.Envelope
+	var managementResponse struct {
+		StatusCode int
+		Headers    map[string][]string
+		Body       []byte
+	}
+	_ = json.Unmarshal(managementHandleRaw, &managementHandleEnvelope)
+	_ = json.Unmarshal(managementHandleEnvelope.Result, &managementResponse)
+	managementHandleOK := managementHandleRC == 0 && managementHandleEnvelope.OK && managementResponse.StatusCode == 200 &&
+		json.Valid(managementResponse.Body) && !bytes.Contains(managementResponse.Body, []byte("TOP_SECRET_SENTINEL"))
 
 	retained, retainedRC, errRetained := callRetained(&plugin, abi.MethodPluginRegister, lifecycle)
 	if errRetained != nil || retainedRC != 0 {
@@ -177,7 +209,8 @@ func runHost(path string) (hostReport, error) {
 		ABIVersion:              uint32(plugin.abi_version),
 		RegistrationOK:          registerRC == 0 && registerEnvelope.OK,
 		NormalizeByteIdentical:  normalizeRC == 0 && normalizeEnvelope.OK && bytes.Equal(normalizeResult.Body, body),
-		ManagementListsEmpty:    managementRC == 0 && managementEnvelope.OK && managementResult.Routes != nil && managementResult.Resources != nil && len(managementResult.Routes) == 0 && len(managementResult.Resources) == 0,
+		ManagementRoutesOK:      managementRoutesOK,
+		ManagementHandleOK:      managementHandleOK,
 		OutstandingSurvivedStop: bytes.Equal(beforeShutdown, afterShutdown),
 		PostShutdownCode: func() string {
 			if postRC == 0 {

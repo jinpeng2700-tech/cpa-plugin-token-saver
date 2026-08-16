@@ -3,6 +3,9 @@ package config
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
@@ -79,7 +82,13 @@ func (c Config) AllowsModel(model string) bool {
 
 // Store publishes validated configurations as atomic immutable snapshots.
 type Store struct {
-	current atomic.Pointer[Config]
+	current atomic.Pointer[storeState]
+}
+
+type storeState struct {
+	config Config
+	valid  bool
+	digest string
 }
 
 // NewStore initializes the store. Invalid cold-start data returns an error but
@@ -87,12 +96,13 @@ type Store struct {
 func NewStore(raw []byte) (*Store, error) {
 	store := &Store{}
 	safe := Defaults()
-	store.current.Store(&safe)
+	store.current.Store(newStoreState(safe, true))
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return store, nil
 	}
 	parsed, errParse := Parse(raw)
 	if errParse != nil {
+		store.current.Store(newStoreState(safe, false))
 		return store, errParse
 	}
 	store.publish(parsed)
@@ -119,12 +129,79 @@ func (s *Store) Snapshot() Config {
 	if current == nil {
 		return Defaults()
 	}
-	return clone(*current)
+	return clone(current.config)
+}
+
+// StatusSnapshot reads the known configuration fields, validity, and digest
+// from one atomic publication without copying preserved RawYAML.
+func (s *Store) StatusSnapshot() (Config, bool, string) {
+	if s == nil {
+		cfg := Defaults()
+		return cfg, false, Digest(cfg)
+	}
+	current := s.current.Load()
+	if current == nil {
+		cfg := Defaults()
+		return cfg, false, Digest(cfg)
+	}
+	cfg := current.config
+	cfg.ModelAllowlist = append([]string(nil), current.config.ModelAllowlist...)
+	if cfg.ModelAllowlist == nil {
+		cfg.ModelAllowlist = []string{}
+	}
+	cfg.RawYAML = nil
+	return cfg, current.valid, current.digest
+}
+
+// CanonicalJSON serializes exactly the nine known fields, including defaults,
+// in their configuration-contract order. RawYAML and unknown fields are never
+// included, so other clients can reproduce Digest without handling YAML.
+func CanonicalJSON(cfg Config) []byte {
+	allowlist := cfg.ModelAllowlist
+	if allowlist == nil {
+		allowlist = []string{}
+	}
+	canonical := struct {
+		RTKEnabled        bool     `json:"rtk_enabled"`
+		HeadroomEnabled   bool     `json:"headroom_enabled"`
+		HeadroomURL       string   `json:"headroom_url"`
+		HeadroomTimeoutMS int      `json:"headroom_timeout_ms"`
+		CavemanEnabled    bool     `json:"caveman_enabled"`
+		CavemanLevel      string   `json:"caveman_level"`
+		PonytailEnabled   bool     `json:"ponytail_enabled"`
+		PonytailLevel     string   `json:"ponytail_level"`
+		ModelAllowlist    []string `json:"model_allowlist"`
+	}{
+		RTKEnabled:        cfg.RTKEnabled,
+		HeadroomEnabled:   cfg.HeadroomEnabled,
+		HeadroomURL:       cfg.HeadroomURL,
+		HeadroomTimeoutMS: cfg.HeadroomTimeoutMS,
+		CavemanEnabled:    cfg.CavemanEnabled,
+		CavemanLevel:      cfg.CavemanLevel,
+		PonytailEnabled:   cfg.PonytailEnabled,
+		PonytailLevel:     cfg.PonytailLevel,
+		ModelAllowlist:    allowlist,
+	}
+	var output bytes.Buffer
+	encoder := json.NewEncoder(&output)
+	encoder.SetEscapeHTML(false)
+	_ = encoder.Encode(canonical)
+	return bytes.TrimSuffix(output.Bytes(), []byte{'\n'})
+}
+
+// Digest returns the lowercase SHA-256 of CanonicalJSON.
+func Digest(cfg Config) string {
+	sum := sha256.Sum256(CanonicalJSON(cfg))
+	return hex.EncodeToString(sum[:])
 }
 
 func (s *Store) publish(cfg Config) {
+	s.current.Store(newStoreState(cfg, true))
+}
+
+func newStoreState(cfg Config, valid bool) *storeState {
 	copy := clone(cfg)
-	s.current.Store(&copy)
+	return &storeState{config: copy, valid: valid, digest: Digest(copy)}
 }
 
 func clone(cfg Config) Config {
