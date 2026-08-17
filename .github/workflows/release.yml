@@ -1,0 +1,128 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Validate source and dependency notices
+        run: |
+          set -euo pipefail
+          chmod +x scripts/check-notices.sh
+          scripts/check-notices.sh
+          test -z "$(gofmt -l .)"
+          go mod tidy -diff
+          go vet ./...
+          go test -race ./...
+
+      - name: Install arm64 cross compiler
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends gcc-aarch64-linux-gnu
+
+      - name: Build Linux release artifacts
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${VERSION#v}"
+          case "$version" in
+            ''|*[!0-9A-Za-z.+-]*) echo "invalid release version" >&2; exit 1 ;;
+          esac
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            cc=gcc
+            if [ "$arch" = arm64 ]; then cc=aarch64-linux-gnu-gcc; fi
+            artifact_version="${version}-linux-${arch}"
+            CGO_ENABLED=1 GOOS=linux GOARCH="$arch" CC="$cc" \
+              go build -trimpath -buildmode=c-shared \
+              -ldflags "-s -w -X github.com/router-for-me/cpa-plugin-token-saver/internal/abi.PluginVersion=${version}" \
+              -o "dist/token-saver-v${artifact_version}.so" .
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
+              go build -trimpath -ldflags "-s -w" \
+              -o "dist/compat-probe-v${version}-linux-${arch}" ./tools/compat-probe
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
+              go build -trimpath -ldflags "-s -w" \
+              -o "dist/update-verifier-v${version}-linux-${arch}" ./tools/update-verifier
+          done
+          rm -f dist/*.h
+
+      - name: Resolve real official compatibility matrix
+        id: candidates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          latest_tag=$(curl --fail --silent --show-error --location \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest | jq -er '.tag_name')
+          case "$latest_tag" in v*) ;; *) echo "latest official release has an invalid tag" >&2; exit 1 ;; esac
+          printf '%s\n' v7.2.133 "$latest_tag" | awk '!seen[$0]++' > candidates.txt
+          echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Prove real host dispatch on baseline and latest stable
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${VERSION#v}"
+          plugin="dist/token-saver-v${version}-linux-amd64.so"
+          while IFS= read -r tag; do
+            release_json=$(curl --fail --silent --show-error --location \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              "https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/tags/${tag}")
+            candidate_version="${tag#v}"
+            asset="CLIProxyAPI_${candidate_version}_linux_amd64.tar.gz"
+            case "$asset" in *_no-plugin*) echo "refusing no-plugin host asset" >&2; exit 1 ;; esac
+            asset_url=$(printf '%s' "$release_json" | jq -er --arg asset "$asset" '.assets[] | select(.name == $asset) | .browser_download_url')
+            case "$asset_url" in *_no-plugin*) echo "refusing no-plugin host asset" >&2; exit 1 ;; esac
+            candidate_dir="build/candidates/${tag}"
+            mkdir -p "$candidate_dir"
+            curl --fail --silent --show-error --location --retry 3 \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              "$asset_url" -o "$candidate_dir/candidate.tar.gz"
+            tar -xzf "$candidate_dir/candidate.tar.gz" -C "$candidate_dir"
+            candidate=$(find "$candidate_dir" -maxdepth 2 -type f \( -name 'cli-proxy-api' -o -name 'CLIProxyAPI' \) -print -quit)
+            test -n "$candidate"
+            chmod +x "$candidate"
+            "dist/compat-probe-v${version}-linux-amd64" \
+              -candidate "$candidate" -plugin "$plugin" -timeout 45s
+            CLIPROXYAPI_CANDIDATE="$candidate" TOKEN_SAVER_PLUGIN="$plugin" \
+              go test -count=1 -run TestRealCandidateDispatch ./test/compat
+            rm -rf "$candidate_dir"
+          done < candidates.txt
+
+      - name: Create transport checksums
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum ./* | sort -k2 > SHA256SUMS)
+          test "$(wc -l < dist/SHA256SUMS)" -eq 6
+
+      - name: Publish immutable tag assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/*
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
+          fi

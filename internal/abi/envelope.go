@@ -30,10 +30,14 @@ const (
 
 const (
 	PluginName       = "Token Saver"
-	PluginVersion    = "0.1.0-dev"
 	PluginAuthor     = "Mr.King"
 	PluginRepository = "https://github.com/router-for-me/cpa-plugin-token-saver"
 )
+
+// PluginVersion is a build identity seam. Release builds override it with
+// -ldflags -X so the runtime status and root-owned approval describe the same
+// artifact rather than relying on a versioned filename alone.
+var PluginVersion = "0.1.0-dev"
 
 // Envelope is the RPC3 response wrapper consumed by CLIProxyAPI.
 type Envelope struct {
