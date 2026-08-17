@@ -105,8 +105,10 @@ jobs:
             chmod +x "$candidate"
             "dist/compat-probe-v${version}-linux-amd64" \
               -candidate "$candidate" -plugin "$plugin" -timeout 45s
+            "dist/compat-probe-v${version}-linux-amd64" \
+              -mode core-only -candidate "$candidate" -timeout 45s
             CLIPROXYAPI_CANDIDATE="$candidate" TOKEN_SAVER_PLUGIN="$plugin" \
-              go test -count=1 -run TestRealCandidateDispatch ./test/compat
+              go test -count=1 -run 'TestRealCandidate(Dispatch|CoreOnlyDispatch)$' ./test/compat
             rm -rf "$candidate_dir"
           done < candidates.txt
 

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "overrides": [
+    {
+      "cli": {
+        "version": "7.2.134",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "arch": "linux-amd64"
+      },
+      "reason": "CVE-YYYY-NNNN security release approved by CHANGE-0000; retain the CLI and isolate Token Saver if plugin compatibility fails"
+    }
+  ]
+}

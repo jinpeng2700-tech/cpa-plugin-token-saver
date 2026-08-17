@@ -18,6 +18,7 @@ func main() {
 func run(args []string, output io.Writer) int {
 	flags := flag.NewFlagSet("compat-probe", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
+	mode := flags.String("mode", string(probe.ModePlugin), "plugin or core-only compatibility mode")
 	candidate := flags.String("candidate", "", "CLIProxyAPI candidate binary")
 	plugin := flags.String("plugin", "", "versioned Token Saver Linux shared library")
 	timeout := flags.Duration("timeout", 45*time.Second, "bounded probe timeout (maximum 60s)")
@@ -26,7 +27,7 @@ func run(args []string, output io.Writer) int {
 		_ = json.NewEncoder(output).Encode(report)
 		return 2
 	}
-	report := probe.Run(context.Background(), probe.Options{CandidatePath: *candidate, PluginPath: *plugin, Timeout: *timeout})
+	report := probe.Run(context.Background(), probe.Options{Mode: probe.Mode(*mode), CandidatePath: *candidate, PluginPath: *plugin, Timeout: *timeout})
 	_ = json.NewEncoder(output).Encode(report)
 	if report.Compatible {
 		return 0

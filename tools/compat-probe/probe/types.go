@@ -11,9 +11,17 @@ const (
 	CavemanMarker  = "[CPA_TOKEN_SAVER_CAVEMAN_START]"
 )
 
+type Mode string
+
+const (
+	ModePlugin   Mode = "plugin"
+	ModeCoreOnly Mode = "core-only"
+)
+
 const (
 	CodeOK                  = "ok"
 	CodeCandidateInvalid    = "candidate_invalid"
+	CodeModeInvalid         = "mode_invalid"
 	CodePluginInvalid       = "plugin_invalid"
 	CodePluginIdentity      = "plugin_identity_mismatch"
 	CodeTemporaryState      = "temporary_state_failed"
@@ -34,10 +42,12 @@ const (
 	CodeDispatch            = "dispatch_failed"
 	CodeMarkerAbsent        = "marker_absent"
 	CodeMarkerDuplicated    = "marker_duplicated"
+	CodeMarkerUnexpected    = "marker_unexpected"
 	CodeSelfTest            = "self_test_failed"
 )
 
 type Options struct {
+	Mode          Mode
 	CandidatePath string
 	PluginPath    string
 	Timeout       time.Duration

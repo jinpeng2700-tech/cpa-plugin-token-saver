@@ -78,3 +78,19 @@ func TestRunClassifiesCandidateExitWithoutLeakingPaths(t *testing.T) {
 		t.Fatalf("report leaked a path or artifact content: %s", raw)
 	}
 }
+
+func TestRunCoreOnlyClassifiesCandidateExitWithoutPluginArtifact(t *testing.T) {
+	candidate := "/bin/false"
+	if runtime.GOOS == "windows" {
+		var errLookPath error
+		candidate, errLookPath = exec.LookPath("cmd.exe")
+		if errLookPath != nil {
+			t.Skip("cmd.exe is unavailable")
+		}
+	}
+
+	report := Run(t.Context(), Options{Mode: ModeCoreOnly, CandidatePath: candidate, Timeout: 2 * time.Second})
+	if report.Compatible || report.Code != CodeCandidateExit {
+		t.Fatalf("Run(core-only) report = %#v, want candidate exit", report)
+	}
+}

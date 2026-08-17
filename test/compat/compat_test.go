@@ -30,3 +30,19 @@ func TestRealCandidateDispatch(t *testing.T) {
 		t.Fatalf("real dispatch evidence is incomplete: %#v", report)
 	}
 }
+
+func TestRealCandidateCoreOnlyDispatch(t *testing.T) {
+	candidate := os.Getenv("CLIPROXYAPI_CANDIDATE")
+	if candidate == "" {
+		t.Skip("CLIPROXYAPI_CANDIDATE is not set")
+	}
+
+	report := probe.Run(t.Context(), probe.Options{
+		Mode:          probe.ModeCoreOnly,
+		CandidatePath: candidate,
+		Timeout:       45 * time.Second,
+	})
+	if !report.Compatible || report.PluginID != "" || report.MarkerCount != 0 {
+		t.Fatalf("real core-only dispatch evidence is incomplete: %#v", report)
+	}
+}

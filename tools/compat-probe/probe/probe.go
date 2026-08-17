@@ -68,6 +68,13 @@ const (
 )
 
 func Run(parent context.Context, options Options) Report {
+	mode := options.Mode
+	if mode == "" {
+		mode = ModePlugin
+	}
+	if mode != ModePlugin && mode != ModeCoreOnly {
+		return failure(CodeModeInvalid)
+	}
 	timeout := options.Timeout
 	if timeout <= 0 {
 		timeout = 45 * time.Second
@@ -80,6 +87,9 @@ func Run(parent context.Context, options Options) Report {
 
 	if !regularFile(options.CandidatePath) {
 		return failure(CodeCandidateInvalid)
+	}
+	if mode == ModeCoreOnly {
+		return runCoreOnly(ctx, options.CandidatePath)
 	}
 	if !regularFile(options.PluginPath) {
 		return failure(CodePluginInvalid)
@@ -115,7 +125,7 @@ func Run(parent context.Context, options Options) Report {
 		return failure(CodeTemporaryState)
 	}
 	configPath := filepath.Join(temporaryRoot, "config.yaml")
-	if !writeCandidateConfig(configPath, temporaryRoot, pluginsDir, port, mock.URL()) {
+	if !writeCandidateConfig(configPath, temporaryRoot, pluginsDir, port, mock.URL(), true) {
 		return failure(CodeTemporaryState)
 	}
 
@@ -206,6 +216,58 @@ func Run(parent context.Context, options Options) Report {
 		PluginID: RequiredPlugin, PluginVersion: pluginState.Version, MarkerCount: markers,
 		ConfigGeneration: appliedStatus.ConfigGeneration, ConfigDigest: appliedStatus.ConfigDigest,
 	}
+}
+
+func runCoreOnly(ctx context.Context, candidatePath string) Report {
+	temporaryRoot, errTemp := os.MkdirTemp("", "cliproxyapi-core-compat-")
+	if errTemp != nil {
+		return failure(CodeTemporaryState)
+	}
+	defer os.RemoveAll(temporaryRoot)
+
+	mock, okMock := startMockProvider()
+	if !okMock {
+		return failure(CodeTemporaryState)
+	}
+	defer mock.Close()
+
+	pluginsDir := filepath.Join(temporaryRoot, "plugins")
+	if errMkdir := os.MkdirAll(pluginsDir, 0o700); errMkdir != nil {
+		return failure(CodeTemporaryState)
+	}
+	port, okPort := ephemeralLoopbackPort()
+	if !okPort {
+		return failure(CodeTemporaryState)
+	}
+	configPath := filepath.Join(temporaryRoot, "config.yaml")
+	if !writeCandidateConfig(configPath, temporaryRoot, pluginsDir, port, mock.URL(), false) {
+		return failure(CodeTemporaryState)
+	}
+
+	process, okStart := startCandidate(candidatePath, configPath)
+	if !okStart {
+		return failure(CodeCandidateStart)
+	}
+	defer process.Stop()
+	baseURL := "http://127.0.0.1:" + strconv.Itoa(port)
+	client := localHTTPClient()
+	if code := waitForCandidate(ctx, client, baseURL, process); code != CodeOK {
+		return failure(code)
+	}
+
+	chatBody := []byte(`{"model":"compat-model","messages":[{"role":"user","content":"bounded core-only compatibility fixture"}],"stream":false}`)
+	var chatResponse map[string]any
+	if outcome := jsonRequest(ctx, client, http.MethodPost, baseURL+"/v1/chat/completions", compatClientKey, chatBody, &chatResponse); outcome != httpOK {
+		return failure(CodeDispatch)
+	}
+	requestCount, markers := mock.Snapshot()
+	if requestCount != 1 {
+		return Report{SchemaVersion: SchemaVersion, Code: CodeDispatch, MarkerCount: markers}
+	}
+	if markers != 0 {
+		return Report{SchemaVersion: SchemaVersion, Code: CodeMarkerUnexpected, MarkerCount: markers}
+	}
+	return Report{SchemaVersion: SchemaVersion, Compatible: true, Code: CodeOK}
 }
 
 func regularFile(path string) bool {
@@ -439,7 +501,7 @@ func waitForAppliedConfig(parent context.Context, client *http.Client, statusURL
 	}
 }
 
-func writeCandidateConfig(path, temporaryRoot, pluginsDir string, port int, providerURL string) bool {
+func writeCandidateConfig(path, temporaryRoot, pluginsDir string, port int, providerURL string, pluginEnabled bool) bool {
 	type remoteManagement struct {
 		AllowRemote            bool   `yaml:"allow-remote"`
 		SecretKey              string `yaml:"secret-key"`
@@ -478,21 +540,23 @@ func writeCandidateConfig(path, temporaryRoot, pluginsDir string, port int, prov
 		Plugins             pluginHost       `yaml:"plugins"`
 		OpenAICompatibility []compatProvider `yaml:"openai-compatibility"`
 	}
+	pluginConfigs := map[string]map[string]any{}
+	if pluginEnabled {
+		pluginConfigs[RequiredPlugin] = map[string]any{
+			"enabled": true, "priority": -100,
+			"rtk_enabled": false, "headroom_enabled": false,
+			"caveman_enabled": false, "caveman_level": "lite",
+			"ponytail_enabled": false, "ponytail_level": "lite",
+			"model_allowlist": []string{compatModel},
+		}
+	}
 	configuration := hostConfig{
 		Host: "127.0.0.1", Port: port, AuthDir: filepath.Join(temporaryRoot, "auth"),
 		APIKeys: []string{compatClientKey}, RequestRetry: 0, CommercialMode: true,
 		RemoteManagement: remoteManagement{
 			SecretKey: compatManagementKey, DisableControlPanel: true, DisableAutoUpdatePanel: true,
 		},
-		Plugins: pluginHost{Enabled: true, Dir: pluginsDir, Configs: map[string]map[string]any{
-			RequiredPlugin: {
-				"enabled": true, "priority": -100,
-				"rtk_enabled": false, "headroom_enabled": false,
-				"caveman_enabled": false, "caveman_level": "lite",
-				"ponytail_enabled": false, "ponytail_level": "lite",
-				"model_allowlist": []string{compatModel},
-			},
-		}},
+		Plugins: pluginHost{Enabled: pluginEnabled, Dir: pluginsDir, Configs: pluginConfigs},
 		OpenAICompatibility: []compatProvider{{
 			Name: "compat-mock", BaseURL: providerURL + "/v1",
 			APIKeyEntries: []compatKey{{APIKey: "compat-upstream-key-only"}},
