@@ -6,13 +6,17 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-24.04
+    outputs:
+      manifest_sha256: ${{ steps.release_manifest.outputs.sha256 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.26.5"
@@ -62,8 +66,65 @@ jobs:
           done
           rm -f dist/*.h
 
+      - name: Create transport checksums
+        id: release_manifest
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum ./* | sort -k2 > SHA256SUMS)
+          test "$(wc -l < dist/SHA256SUMS)" -eq 6
+          manifest_sha256=$(sha256sum dist/SHA256SUMS | awk '{print $1}')
+          echo "sha256=$manifest_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable release artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-dist-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: false
+
+  compatibility:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Download release artifact for compatibility
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-dist-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-source
+
+      - name: Prepare disposable candidate artifact copy
+        env:
+          EXPECTED_MANIFEST_SHA256: ${{ needs.build.outputs.manifest_sha256 }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          source_root="$RUNNER_TEMP/release-source"
+          candidate_root="$RUNNER_TEMP/candidate-artifact"
+          case "$source_root" in "$RUNNER_TEMP"/*) ;; *) exit 1 ;; esac
+          observed_manifest_sha256=$(sha256sum "$source_root/SHA256SUMS" | awk '{print $1}')
+          test "$observed_manifest_sha256" = "$EXPECTED_MANIFEST_SHA256"
+          (cd "$source_root" && sha256sum -c SHA256SUMS)
+          mkdir "$candidate_root"
+          cp -a "$source_root/." "$candidate_root/"
+          rm -rf "$source_root"
+          version="${VERSION#v}"
+          cp "$candidate_root/token-saver-v${version}-linux-amd64.so" "$candidate_root/token-saver.so"
+          chmod +x "$candidate_root/compat-probe-v${version}-linux-amd64"
+
       - name: Resolve real official compatibility matrix
-        id: candidates
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -73,28 +134,28 @@ jobs:
             -H "Authorization: Bearer ${GH_TOKEN}" \
             https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest | jq -er '.tag_name')
           case "$latest_tag" in v*) ;; *) echo "latest official release has an invalid tag" >&2; exit 1 ;; esac
-          printf '%s\n' v7.2.133 "$latest_tag" | awk '!seen[$0]++' > candidates.txt
-          echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
+          printf '%s\n' v7.2.133 "$latest_tag" | awk '!seen[$0]++' > "$RUNNER_TEMP/candidates.txt"
 
-      - name: Prove real host dispatch on baseline and latest stable
+      - name: Download official candidates without executing them
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          version="${VERSION#v}"
-          plugin="dist/token-saver-v${version}-linux-amd64.so"
+          index=0
           while IFS= read -r tag; do
+            candidate_version="${tag#v}"
+            case "$candidate_version" in
+              ''|*[!0-9A-Za-z.+-]*) echo "official candidate has an invalid version" >&2; exit 1 ;;
+            esac
             release_json=$(curl --fail --silent --show-error --location \
               -H "Accept: application/vnd.github+json" \
               -H "Authorization: Bearer ${GH_TOKEN}" \
               "https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/tags/${tag}")
-            candidate_version="${tag#v}"
             asset="CLIProxyAPI_${candidate_version}_linux_amd64.tar.gz"
             case "$asset" in *_no-plugin*) echo "refusing no-plugin host asset" >&2; exit 1 ;; esac
             asset_url=$(printf '%s' "$release_json" | jq -er --arg asset "$asset" '.assets[] | select(.name == $asset) | .browser_download_url')
             case "$asset_url" in *_no-plugin*) echo "refusing no-plugin host asset" >&2; exit 1 ;; esac
-            candidate_dir="build/candidates/${tag}"
+            candidate_dir="$RUNNER_TEMP/official-candidates/$index"
             mkdir -p "$candidate_dir"
             curl --fail --silent --show-error --location --retry 3 \
               -H "Authorization: Bearer ${GH_TOKEN}" \
@@ -103,26 +164,66 @@ jobs:
             candidate=$(find "$candidate_dir" -maxdepth 2 -type f \( -name 'cli-proxy-api' -o -name 'CLIProxyAPI' \) -print -quit)
             test -n "$candidate"
             chmod +x "$candidate"
-            "dist/compat-probe-v${version}-linux-amd64" \
-              -candidate "$candidate" -plugin "$plugin" -timeout 45s
-            "dist/compat-probe-v${version}-linux-amd64" \
-              -mode core-only -candidate "$candidate" -timeout 45s
-            CLIPROXYAPI_CANDIDATE="$candidate" TOKEN_SAVER_PLUGIN="$plugin" \
-              go test -count=1 -run 'TestRealCandidate(Dispatch|CoreOnlyDispatch)$' ./test/compat
-            rm -rf "$candidate_dir"
-          done < candidates.txt
+            index=$((index + 1))
+          done < "$RUNNER_TEMP/candidates.txt"
 
-      - name: Create transport checksums
+      - name: Prove real host dispatch on baseline and latest stable
+        env:
+          VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          (cd dist && sha256sum ./* | sort -k2 > SHA256SUMS)
-          test "$(wc -l < dist/SHA256SUMS)" -eq 6
+          version="${VERSION#v}"
+          candidate_root="$RUNNER_TEMP/candidate-artifact"
+          plugin="$candidate_root/token-saver.so"
+          compat_probe="$candidate_root/compat-probe-v${version}-linux-amd64"
+          mkdir -p "$RUNNER_TEMP/candidate-home" "$RUNNER_TEMP/go-cache" "$RUNNER_TEMP/go"
+          candidate_environment=(
+            "HOME=$RUNNER_TEMP/candidate-home"
+            "LANG=C.UTF-8"
+            "NO_PROXY=127.0.0.1,::1"
+            "PATH=$PATH"
+            "TMPDIR=$RUNNER_TEMP"
+            "no_proxy=127.0.0.1,::1"
+          )
+          index=0
+          while IFS= read -r tag; do
+            candidate_dir="$RUNNER_TEMP/official-candidates/$index"
+            candidate=$(find "$candidate_dir" -maxdepth 2 -type f \( -name 'cli-proxy-api' -o -name 'CLIProxyAPI' \) -print -quit)
+            test -n "$candidate"
+            env -i "${candidate_environment[@]}" \
+              "$compat_probe" -candidate "$candidate" -plugin "$plugin" -timeout 45s
+            env -i "${candidate_environment[@]}" \
+              "$compat_probe" -mode core-only -candidate "$candidate" -timeout 45s
+            env -i "${candidate_environment[@]}" \
+              GOCACHE="$RUNNER_TEMP/go-cache" GOPATH="$RUNNER_TEMP/go" \
+              CLIPROXYAPI_CANDIDATE="$candidate" TOKEN_SAVER_PLUGIN="$plugin" \
+              go test -count=1 -run 'TestRealCandidate(Dispatch|CoreOnlyDispatch)$' ./test/compat
+            index=$((index + 1))
+          done < "$RUNNER_TEMP/candidates.txt"
+
+  publish:
+    needs: [build, compatibility]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download verified immutable release artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-dist-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist
 
       - name: Publish immutable tag assets
         env:
+          EXPECTED_MANIFEST_SHA256: ${{ needs.build.outputs.manifest_sha256 }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          observed_manifest_sha256=$(sha256sum dist/SHA256SUMS | awk '{print $1}')
+          test "$observed_manifest_sha256" = "$EXPECTED_MANIFEST_SHA256"
+          (cd dist && sha256sum -c SHA256SUMS)
+          test "$(wc -l < dist/SHA256SUMS)" -eq 6
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" dist/*
           else

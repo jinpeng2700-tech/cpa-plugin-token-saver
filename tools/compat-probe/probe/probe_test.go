@@ -79,6 +79,56 @@ func TestRunClassifiesCandidateExitWithoutLeakingPaths(t *testing.T) {
 	}
 }
 
+func TestRunAcceptsProductionStablePluginFilename(t *testing.T) {
+	candidate := "/bin/false"
+	if runtime.GOOS == "windows" {
+		var errLookPath error
+		candidate, errLookPath = exec.LookPath("cmd.exe")
+		if errLookPath != nil {
+			t.Skip("cmd.exe is unavailable")
+		}
+	}
+	tempDir := t.TempDir()
+	pluginPath := filepath.Join(tempDir, "token-saver.so")
+	if errWrite := os.WriteFile(pluginPath, []byte("not-a-real-plugin"), 0o600); errWrite != nil {
+		t.Fatal(errWrite)
+	}
+
+	report := Run(t.Context(), Options{CandidatePath: candidate, PluginPath: pluginPath, Timeout: 2 * time.Second})
+	if report.Compatible || report.Code != CodeCandidateExit {
+		t.Fatalf("Run() with production stable plugin name = %#v, want candidate exit after identity validation", report)
+	}
+}
+
+func TestSanitizedCandidateEnvironmentDropsSentinelAndUsesAllowlist(t *testing.T) {
+	const sentinelName = "COMPAT_PROBE_SENTINEL_SECRET"
+	const sentinelValue = "sentinel-must-never-reach-candidate"
+	t.Setenv(sentinelName, sentinelValue)
+	t.Setenv("GH_TOKEN", sentinelValue)
+	t.Setenv("GITHUB_TOKEN", sentinelValue)
+
+	allowed := map[string]struct{}{
+		"COMSPEC": {}, "HOME": {}, "LANG": {}, "LC_ALL": {}, "NO_PROXY": {}, "PATH": {},
+		"PATHEXT": {}, "SYSTEMROOT": {}, "TEMP": {}, "TMP": {}, "TMPDIR": {}, "TZ": {}, "WINDIR": {},
+	}
+	environment := sanitizedCandidateEnvironment()
+	for _, item := range environment {
+		name, value, ok := strings.Cut(item, "=")
+		if !ok {
+			t.Fatalf("candidate environment entry has no assignment: %q", item)
+		}
+		if name == sentinelName || value == sentinelValue {
+			t.Fatalf("candidate environment leaked sentinel through %q", name)
+		}
+	}
+	for _, item := range environment {
+		name, _, _ := strings.Cut(item, "=")
+		if _, okAllowed := allowed[strings.ToUpper(name)]; !okAllowed {
+			t.Fatalf("candidate environment contains non-allowlisted variable %q", name)
+		}
+	}
+}
+
 func TestRunCoreOnlyClassifiesCandidateExitWithoutPluginArtifact(t *testing.T) {
 	candidate := "/bin/false"
 	if runtime.GOOS == "windows" {

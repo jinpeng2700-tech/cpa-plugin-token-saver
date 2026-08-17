@@ -200,6 +200,7 @@ if [ "${FAKE_NO_BACKUP:-0}" = 0 ]; then
     fi
 fi
 printf 'candidate-cli\n' >"$CLIPROXYAPI_BINARY"
+[ "${FAKE_UPDATER_PARTIAL_FAIL:-0}" = 0 ] || exit 1
 printf '1.2.3\n' >"$CLIPROXYAPI_VERSION_FILE"
 EOF
     cat >"$app/compat-probe" <<'EOF'
@@ -352,6 +353,18 @@ test_candidate_failure_rolls_back() {
     [ -f "$root/app/.token-saver-update/failed-candidate.json" ] || fail 'candidate rollback did not record fingerprint'
 }
 
+test_partial_updater_failure_rolls_back() {
+    root=$(make_case updater-partial-failure)
+    export FAKE_UPDATER_PARTIAL_FAIL=1
+    run_wrapper "$root"
+    unset FAKE_UPDATER_PARTIAL_FAIL
+    assert_eq "$RUN_RC" 3 'partial updater failure rollback exit'
+    assert_eq "$(tr -d '\r\n' <"$root/app/cli-proxy-api")" old-cli 'partial updater failure rollback binary'
+    assert_eq "$(tr -d '\r\n' <"$root/app/version.txt")" 1.0.0 'partial updater failure rollback version'
+    assert_contains "$root/events" 'verifier rollback' 'partial updater failure rollback verification'
+    [ -f "$root/app/.token-saver-update/failed-candidate.json" ] || fail 'partial updater failure did not record fingerprint'
+}
+
 test_security_override_keeps_cli_and_isolates_plugin() {
     root=$(make_case override)
     printf '{"schema_version":1,"overrides":[]}\n' >"$root/app/security-overrides.json"
@@ -434,6 +447,7 @@ test_systemd_239_refusal
 test_normal_update_and_credential_boundary
 test_preflight_blocked_not_fingerprinted
 test_same_failed_fingerprint_skips
+test_partial_updater_failure_rolls_back
 test_candidate_failure_rolls_back
 test_security_override_keeps_cli_and_isolates_plugin
 test_rollback_failure_disables_timer

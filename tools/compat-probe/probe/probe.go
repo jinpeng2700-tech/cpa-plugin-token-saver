@@ -94,8 +94,8 @@ func Run(parent context.Context, options Options) Report {
 	if !regularFile(options.PluginPath) {
 		return failure(CodePluginInvalid)
 	}
-	pluginID, filenameVersion, okFilename := parsePluginFilename(options.PluginPath)
-	if !okFilename || pluginID != RequiredPlugin || filenameVersion == "" {
+	pluginID, _, okFilename := parsePluginFilename(options.PluginPath)
+	if !okFilename || pluginID != RequiredPlugin {
 		return failure(CodePluginIdentity)
 	}
 
@@ -321,14 +321,14 @@ func startCandidate(candidatePath, configPath string) (*candidateProcess, bool) 
 }
 
 func sanitizedCandidateEnvironment() []string {
-	blocked := map[string]struct{}{
-		"MANAGEMENT_PASSWORD": {}, "HTTP_PROXY": {}, "HTTPS_PROXY": {}, "ALL_PROXY": {},
-		"http_proxy": {}, "https_proxy": {}, "all_proxy": {}, "NO_PROXY": {}, "no_proxy": {},
+	allowed := map[string]struct{}{
+		"COMSPEC": {}, "HOME": {}, "LANG": {}, "LC_ALL": {}, "PATH": {}, "PATHEXT": {},
+		"SYSTEMROOT": {}, "TEMP": {}, "TMP": {}, "TMPDIR": {}, "TZ": {}, "WINDIR": {},
 	}
-	environment := make([]string, 0, len(os.Environ())+2)
+	environment := make([]string, 0, len(allowed)+2)
 	for _, item := range os.Environ() {
 		name, _, _ := strings.Cut(item, "=")
-		if _, remove := blocked[name]; !remove {
+		if _, keep := allowed[strings.ToUpper(name)]; keep {
 			environment = append(environment, item)
 		}
 	}

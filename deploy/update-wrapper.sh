@@ -450,7 +450,12 @@ fi
 
 snapshot_backup_directories
 if ! "$updater" "$release_tag"; then
-    die "existing_official_updater_failed"
+    if ! resolve_new_backup_directory; then
+        disable_timer
+        alert "rollback_backup_discovery_failed timer=$timer_name disabled; expected exactly one new root-owned backup-pre-$release_tag-* directory created after $update_started_at"
+        exit 4
+    fi
+    rollback_candidate "existing_official_updater_failed" true
 fi
 if ! resolve_new_backup_directory; then
     disable_timer
