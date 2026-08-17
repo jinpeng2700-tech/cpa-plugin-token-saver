@@ -1,6 +1,7 @@
 package verifier
 
 import (
+	"bytes"
 	"crypto/subtle"
 	"encoding/json"
 	"io"
@@ -12,7 +13,7 @@ var lowerSHA256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func ParseApproval(raw []byte) (Approval, string) {
 	var approval Approval
-	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if errDecode := decoder.Decode(&approval); errDecode != nil {
 		return Approval{}, CodeApprovalInvalid

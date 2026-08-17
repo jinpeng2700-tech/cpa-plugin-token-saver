@@ -546,18 +546,24 @@ func (view *projection) rewrite(body []byte, replacements []string) ([]byte, boo
 	if len(edits) == 0 {
 		return body, false
 	}
-	sort.Slice(edits, func(left, right int) bool { return edits[left].start > edits[right].start })
-	output := bytes.Clone(body)
+	sort.Slice(edits, func(left, right int) bool { return edits[left].start < edits[right].start })
+	outputLength := len(body)
+	previousEnd := 0
 	for _, current := range edits {
-		if current.start < 0 || current.end < current.start || current.end > len(output) {
+		if current.start < previousEnd || current.end < current.start || current.end > len(body) {
 			return body, false
 		}
-		next := make([]byte, 0, len(output)-(current.end-current.start)+len(current.raw))
-		next = append(next, output[:current.start]...)
-		next = append(next, current.raw...)
-		next = append(next, output[current.end:]...)
-		output = next
+		outputLength += len(current.raw) - (current.end - current.start)
+		previousEnd = current.end
 	}
+	output := make([]byte, 0, outputLength)
+	previousEnd = 0
+	for _, current := range edits {
+		output = append(output, body[previousEnd:current.start]...)
+		output = append(output, current.raw...)
+		previousEnd = current.end
+	}
+	output = append(output, body[previousEnd:]...)
 	return output, true
 }
 

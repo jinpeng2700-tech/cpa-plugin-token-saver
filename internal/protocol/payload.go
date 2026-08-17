@@ -134,18 +134,29 @@ func (p Payload) Rewrite(replacements map[int]string) []byte {
 	if len(edits) == 0 {
 		return p.raw
 	}
-	sort.Slice(edits, func(i, j int) bool { return edits[i].start > edits[j].start })
-	out := bytes.Clone(p.raw)
+	sort.Slice(edits, func(i, j int) bool { return edits[i].start < edits[j].start })
+	valid := edits[:0]
+	outputLength := len(p.raw)
+	previousEnd := 0
 	for _, current := range edits {
-		if current.start < 0 || current.end < current.start || current.end > len(out) {
+		if current.start < previousEnd || current.end < current.start || current.end > len(p.raw) {
 			continue
 		}
-		next := make([]byte, 0, len(out)-(current.end-current.start)+len(current.raw))
-		next = append(next, out[:current.start]...)
-		next = append(next, current.raw...)
-		next = append(next, out[current.end:]...)
-		out = next
+		valid = append(valid, current)
+		outputLength += len(current.raw) - (current.end - current.start)
+		previousEnd = current.end
 	}
+	if len(valid) == 0 {
+		return p.raw
+	}
+	out := make([]byte, 0, outputLength)
+	previousEnd = 0
+	for _, current := range valid {
+		out = append(out, p.raw[previousEnd:current.start]...)
+		out = append(out, current.raw...)
+		previousEnd = current.end
+	}
+	out = append(out, p.raw[previousEnd:]...)
 	return out
 }
 

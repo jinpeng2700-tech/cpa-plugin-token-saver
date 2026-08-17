@@ -100,6 +100,20 @@ func TestViewMarksErrorsAndPreservesBypassBytes(t *testing.T) {
 	}
 }
 
+func TestRewriteAppliesMultipleSlotsWithoutReencodingSurroundingBytes(t *testing.T) {
+	body := []byte(" {\n  \"messages\": [\n    {\"role\":\"tool\",\"tool_call_id\":\"one\",\"content\":\"first\"},\n    {\"role\":\"tool\",\"tool_call_id\":\"two\",\"content\":\"second\"}\n  ],\n  \"temperature\": 1.0\n}\n")
+	view, ok := View(body, Pair{From: "openai", To: "openai"})
+	if !ok || len(view.Slots()) != 2 {
+		t.Fatalf("slots = %#v, recognized=%v", view.Slots(), ok)
+	}
+
+	want := []byte(" {\n  \"messages\": [\n    {\"role\":\"tool\",\"tool_call_id\":\"one\",\"content\":\"x\"},\n    {\"role\":\"tool\",\"tool_call_id\":\"two\",\"content\":\"longer\\nvalue\"}\n  ],\n  \"temperature\": 1.0\n}\n")
+	got := view.Rewrite(map[int]string{0: "x", 1: "longer\nvalue"})
+	if !bytes.Equal(got, want) {
+		t.Fatalf("multi-slot rewrite changed surrounding bytes:\n got %q\nwant %q", got, want)
+	}
+}
+
 func TestPairEligibilityMatchesBuiltInTranslatorRegistrations(t *testing.T) {
 	for _, pair := range []Pair{
 		{From: "openai", To: "openai"},
