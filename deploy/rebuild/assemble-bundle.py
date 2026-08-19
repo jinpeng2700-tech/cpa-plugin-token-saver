@@ -29,6 +29,10 @@ TEMPLATES = {
     "firewall/cpa-network-guard.nft": "firewall/cpa-network-guard.nft",
     "firewall/cpa-network-guard.service": "firewall/cpa-network-guard.service",
     "firewall/cpa-network-guard.env.template": "firewall/cpa-network-guard.env.template",
+    "stage-release.sh": "deploy/stage-release.sh",
+    "activate-release.sh": "deploy/activate-release.sh",
+    "rollback-release.sh": "deploy/rollback-release.sh",
+    "validate-bundle.py": "deploy/validate-bundle.py",
 }
 def load_validator(script_dir):
     spec = importlib.util.spec_from_file_location("rebuild_validate_bundle", script_dir / "validate-bundle.py")
@@ -59,7 +63,7 @@ def build(staging, args, script_dir, repo_root, validator):
     for source_name, relative in INPUTS.items():
         copy_file(input_dir / source_name, staging / relative, relative in validator.EXECUTABLES)
     for source_name, relative in TEMPLATES.items():
-        copy_file(script_dir / source_name, staging / relative)
+        copy_file(script_dir / source_name, staging / relative, relative in validator.EXECUTABLES)
 
     license_dir = staging / "licenses"
     for source in sorted((repo_root / "licenses").glob("*")):

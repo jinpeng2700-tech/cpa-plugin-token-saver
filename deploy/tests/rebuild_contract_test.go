@@ -224,12 +224,29 @@ func TestRebuildBundleRoundTripAndSecretRejection(t *testing.T) {
 	if len(manifest.Files) < 10 {
 		t.Fatalf("manifest file list too short: %d", len(manifest.Files))
 	}
+	requiredDeploymentFiles := map[string]bool{
+		"deploy/stage-release.sh":    false,
+		"deploy/activate-release.sh": false,
+		"deploy/rollback-release.sh": false,
+		"deploy/validate-bundle.py":  false,
+	}
 	for _, file := range manifest.Files {
 		if file.Path == "" || len(file.SHA256) != sha256.Size*2 || file.Mode == "" {
 			t.Fatalf("incomplete manifest file entry: %+v", file)
 		}
 		if _, err := hex.DecodeString(file.SHA256); err != nil {
 			t.Fatalf("invalid file hash %q: %v", file.SHA256, err)
+		}
+		if _, required := requiredDeploymentFiles[file.Path]; required {
+			if file.Mode != "0700" {
+				t.Fatalf("deployment file %s mode = %s, want 0700", file.Path, file.Mode)
+			}
+			requiredDeploymentFiles[file.Path] = true
+		}
+	}
+	for file, found := range requiredDeploymentFiles {
+		if !found {
+			t.Fatalf("deployment file missing from manifest: %s", file)
 		}
 	}
 

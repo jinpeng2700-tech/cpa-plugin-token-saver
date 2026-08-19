@@ -30,11 +30,17 @@ SECRET_MARKERS = (
     re.compile(rb"\bsk-[A-Za-z0-9_-]{8,}\b"),
 )
 PLACEHOLDERS = (b"REPLACE_", b"CHANGEME", b"REQUIRED", b"${", b"<")
-EXECUTABLES = {
+ELF_EXECUTABLES = {
     "cli-proxy-api",
     "plugins/linux/amd64/token-saver-v1.0.1.so",
     "tools/compat-probe",
     "tools/update-verifier",
+}
+EXECUTABLES = ELF_EXECUTABLES | {
+    "deploy/stage-release.sh",
+    "deploy/activate-release.sh",
+    "deploy/rollback-release.sh",
+    "deploy/validate-bundle.py",
 }
 
 
@@ -59,7 +65,7 @@ def scan_secrets(path, relative):
     if SENSITIVE_PATH.search(normalized):
         fail(f"secret path rejected: {normalized}")
     raw = path.read_bytes()
-    if normalized in EXECUTABLES:
+    if normalized in ELF_EXECUTABLES:
         if not raw.startswith(b"\x7fELF"):
             fail(f"executable is not ELF: {normalized}")
         return

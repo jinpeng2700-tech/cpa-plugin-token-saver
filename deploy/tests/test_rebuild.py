@@ -186,6 +186,14 @@ class RebuildDeliveryTest(unittest.TestCase):
                 ]},
             )
             self.assertGreaterEqual(len(manifest["files"]), 10)
+            for required in [
+                "deploy/stage-release.sh",
+                "deploy/activate-release.sh",
+                "deploy/rollback-release.sh",
+                "deploy/validate-bundle.py",
+            ]:
+                entry = next(item for item in manifest["files"] if item["path"] == required)
+                self.assertEqual("0700", entry["mode"])
             for entry in manifest["files"]:
                 self.assertEqual(64, len(entry["sha256"]))
                 bytes.fromhex(entry["sha256"])
