@@ -61,7 +61,11 @@ chmod 0700 \
     "$temporary/cli-proxy-api" \
     "$temporary/plugins/linux/amd64/token-saver-v1.0.1.so" \
     "$temporary/tools/compat-probe" \
-    "$temporary/tools/update-verifier"
+    "$temporary/tools/update-verifier" \
+    "$temporary/deploy/stage-release.sh" \
+    "$temporary/deploy/activate-release.sh" \
+    "$temporary/deploy/rollback-release.sh" \
+    "$temporary/deploy/validate-bundle.py"
 
 mv -T -- "$temporary" "$target"
 ln -s -- "$target" "$temporary_link"

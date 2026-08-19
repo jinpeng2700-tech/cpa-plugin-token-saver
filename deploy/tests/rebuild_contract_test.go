@@ -53,6 +53,17 @@ func TestRebuildSafeDefaultsAndAtomicSwitch(t *testing.T) {
 			}
 		}
 	}
+	stage := readRepositoryFile(t, "deploy/rebuild/stage-release.sh")
+	for _, want := range []string{
+		"$temporary/deploy/stage-release.sh",
+		"$temporary/deploy/activate-release.sh",
+		"$temporary/deploy/rollback-release.sh",
+		"$temporary/deploy/validate-bundle.py",
+	} {
+		if !strings.Contains(stage, want) {
+			t.Errorf("stage script missing executable mode repair for %q", want)
+		}
+	}
 
 	for _, name := range []string{
 		"deploy/rebuild/activate-release.sh",

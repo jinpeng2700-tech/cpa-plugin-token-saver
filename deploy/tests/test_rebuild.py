@@ -87,6 +87,14 @@ class RebuildDeliveryTest(unittest.TestCase):
             script = (REBUILD / name).read_text()
             for expected in ["--apply", "DRY RUN", "id -u", "root"]:
                 self.assertIn(expected, script)
+        stage = (REBUILD / "stage-release.sh").read_text()
+        for expected in [
+            "$temporary/deploy/stage-release.sh",
+            "$temporary/deploy/activate-release.sh",
+            "$temporary/deploy/rollback-release.sh",
+            "$temporary/deploy/validate-bundle.py",
+        ]:
+            self.assertIn(expected, stage)
         for name in ["activate-release.sh", "rollback-release.sh"]:
             script = (REBUILD / name).read_text()
             for expected in [
