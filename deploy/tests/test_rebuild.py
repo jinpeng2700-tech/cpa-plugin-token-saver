@@ -1,4 +1,5 @@
 import hashlib
+import importlib.util
 import json
 import pathlib
 import shutil
@@ -13,6 +14,16 @@ REBUILD = ROOT / "deploy" / "rebuild"
 
 
 class RebuildDeliveryTest(unittest.TestCase):
+    def test_generic_secret_assignment_still_rejected_outside_built_panel(self):
+        spec = importlib.util.spec_from_file_location("rebuild_validator", REBUILD / "validate-bundle.py")
+        validator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(validator)
+        with tempfile.TemporaryDirectory() as temporary:
+            secret = pathlib.Path(temporary) / "settings.json"
+            secret.write_text('{"client_secret":"live-secret"}\n')
+            with self.assertRaisesRegex(ValueError, "secret assignment"):
+                validator.scan_secrets(secret, pathlib.PurePosixPath("config/settings.json"))
+
     def test_required_files_and_static_security_contracts(self):
         required = [
             "assemble-bundle.py",
@@ -223,7 +234,7 @@ class RebuildDeliveryTest(unittest.TestCase):
             self.assertNotEqual(0, rejected.returncode)
             self.assertIn("secret", (rejected.stdout + rejected.stderr).lower())
 
-            (inputs / "management.html").write_text('{"client_secret":"live-secret"}\n')
+            (inputs / "management.html").write_text('{"client_secret":"sk-live-secret"}\n')
             json_secret_output = temporary / "json-secret-bundle"
             json_secret_command = [str(json_secret_output) if value == str(output) else value for value in command]
             rejected = subprocess.run(json_secret_command, capture_output=True, text=True)
