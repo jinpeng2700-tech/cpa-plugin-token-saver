@@ -83,42 +83,40 @@ func jobNeeds(job releaseJob, dependency string) bool {
 	return false
 }
 
-func TestReleaseWorkflowIsolatesCandidateFromPublisher(t *testing.T) {
+func TestReleaseWorkflowRunsReadOnlyCompatibilityWithoutPublishing(t *testing.T) {
 	workflow := readReleaseWorkflow(t)
 	build := requireReleaseJob(t, workflow, "build")
 	compatibility := requireReleaseJob(t, workflow, "compatibility")
-	publish := requireReleaseJob(t, workflow, "publish")
 
-	if workflow.Permissions["contents"] == "write" {
-		t.Fatal("contents: write must not be granted at workflow scope")
+	if workflow.Permissions["contents"] != "read" {
+		t.Fatal("workflow must grant read-only contents permission")
 	}
 	for name, job := range workflow.Jobs {
-		if job.Permissions["contents"] == "write" && name != "publish" {
-			t.Fatalf("%s job has contents: write; only publish may write releases", name)
+		for permission, access := range job.Permissions {
+			if access == "write" {
+				t.Fatalf("%s job has write permission %s", name, permission)
+			}
 		}
 	}
-	if publish.Permissions["contents"] != "write" {
-		t.Fatal("publish job must own the sole contents: write permission")
+	if _, exists := workflow.Jobs["publish"]; exists {
+		t.Fatal("selected deployment plan forbids a GitHub release publisher")
 	}
-	for permission, access := range compatibility.Permissions {
-		if access == "write" {
-			t.Fatalf("compatibility job has write permission %s", permission)
-		}
+	if len(workflow.Jobs) != 2 {
+		t.Fatalf("release workflow jobs = %d, want build and compatibility only", len(workflow.Jobs))
 	}
 	if compatibility.Permissions["contents"] != "read" || compatibility.Permissions["actions"] != "read" {
 		t.Fatal("compatibility job must have explicit read-only contents and actions permissions")
 	}
-	if !jobNeeds(publish, "build") || !jobNeeds(publish, "compatibility") {
-		t.Fatal("publish job must wait for both build and compatibility")
+	if !jobNeeds(compatibility, "build") {
+		t.Fatal("compatibility job must wait for build")
 	}
 
 	compatibilityRun := joinedRun(compatibility)
-	publishRun := joinedRun(publish)
-	if !strings.Contains(compatibilityRun, "compat-probe") || strings.Contains(publishRun, "compat-probe") {
-		t.Fatal("only the read-only compatibility job may execute the downloaded candidate")
+	if !strings.Contains(compatibilityRun, "compat-probe") {
+		t.Fatal("read-only compatibility job must execute the downloaded candidate")
 	}
-	if !strings.Contains(publishRun, "gh release") || strings.Contains(compatibilityRun, "gh release") {
-		t.Fatal("only the write-authorized publish job may invoke gh release")
+	if strings.Contains(readRepositoryFile(t, ".github/workflows/release.yml"), "gh release") {
+		t.Fatal("release workflow must not publish a GitHub release")
 	}
 	checkout := requireActionStep(t, compatibility, "actions/checkout")
 	if workflowValue(checkout.With, "persist-credentials") != "false" {
@@ -132,18 +130,20 @@ func TestReleaseWorkflowIsolatesCandidateFromPublisher(t *testing.T) {
 			t.Fatalf("candidate execution step %q exposes a repository token or secret", step.Name)
 		}
 	}
+	ci := readRepositoryFile(t, ".github/workflows/ci.yml")
+	if !strings.Contains(ci, "tags-ignore:") || !strings.Contains(ci, `- "v*"`) {
+		t.Fatal("ordinary CI must ignore release tags to avoid duplicate builds")
+	}
 	_ = build
 }
 
-func TestReleaseWorkflowPublishesFreshImmutableBuildArtifact(t *testing.T) {
+func TestReleaseWorkflowUsesFreshImmutableBuildArtifact(t *testing.T) {
 	workflow := readReleaseWorkflow(t)
 	build := requireReleaseJob(t, workflow, "build")
 	compatibility := requireReleaseJob(t, workflow, "compatibility")
-	publish := requireReleaseJob(t, workflow, "publish")
 
 	upload := requireActionStep(t, build, "actions/upload-artifact")
 	compatibilityDownload := requireActionStep(t, compatibility, "actions/download-artifact")
-	publishDownload := requireActionStep(t, publish, "actions/download-artifact")
 	artifactName := workflowValue(upload.With, "name")
 	if artifactName == "" || !strings.Contains(artifactName, "github.run_id") || !strings.Contains(artifactName, "github.run_attempt") {
 		t.Fatalf("build artifact name %q is not unique to this run attempt", artifactName)
@@ -154,13 +154,8 @@ func TestReleaseWorkflowPublishesFreshImmutableBuildArtifact(t *testing.T) {
 	if !strings.Contains(workflowValue(build.Outputs, "manifest_sha256"), "steps.release_manifest.outputs.sha256") {
 		t.Fatal("build must bind downstream jobs to the original checksum manifest digest")
 	}
-	if workflowValue(compatibilityDownload.With, "name") != artifactName || workflowValue(publishDownload.With, "name") != artifactName {
-		t.Fatal("compatibility and publish must independently download the exact build artifact")
-	}
-	compatibilityPath := workflowValue(compatibilityDownload.With, "path")
-	publishPath := workflowValue(publishDownload.With, "path")
-	if compatibilityPath == "" || publishPath == "" || compatibilityPath == publishPath {
-		t.Fatal("candidate and publisher must download the artifact into different job-local paths")
+	if workflowValue(compatibilityDownload.With, "name") != artifactName {
+		t.Fatal("compatibility must download the exact build artifact")
 	}
 
 	compatibilityRun := joinedRun(compatibility)
@@ -172,10 +167,10 @@ func TestReleaseWorkflowPublishesFreshImmutableBuildArtifact(t *testing.T) {
 	if !strings.Contains(compatibilityRun, `token-saver.so`) {
 		t.Fatal("real compatibility probe must exercise the production stable plugin filename")
 	}
-	if !strings.Contains(joinedRun(publish), "sha256sum -c SHA256SUMS") {
-		t.Fatal("publisher must verify the freshly downloaded build artifact before release")
+	if !strings.Contains(compatibilityRun, "sha256sum -c SHA256SUMS") {
+		t.Fatal("compatibility must verify the freshly downloaded build artifact")
 	}
-	if !strings.Contains(joinedRun(publish), "EXPECTED_MANIFEST_SHA256") {
-		t.Fatal("publisher must compare the downloaded manifest with the build job output")
+	if !strings.Contains(compatibilityRun, "EXPECTED_MANIFEST_SHA256") {
+		t.Fatal("compatibility must compare the downloaded manifest with the build job output")
 	}
 }

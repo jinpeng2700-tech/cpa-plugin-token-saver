@@ -1,0 +1,10 @@
+*
+!Makefile
+!go.mod
+!go.sum
+!main.go
+!main_nocgo.go
+!internal/
+!internal/**
+!tools/
+!tools/**

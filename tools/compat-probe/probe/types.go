@@ -6,9 +6,11 @@ import (
 )
 
 const (
-	SchemaVersion  = 1
-	RequiredPlugin = "token-saver"
-	CavemanMarker  = "[CPA_TOKEN_SAVER_CAVEMAN_START]"
+	SchemaVersion   = 1
+	RequiredPlugin  = "token-saver"
+	RequiredVersion = "1.0.1"
+	CavemanMarker   = "[CPA_TOKEN_SAVER_CAVEMAN_START]"
+	PonytailMarker  = "[CPA_TOKEN_SAVER_PONYTAIL_START]"
 )
 
 type Mode string
@@ -32,6 +34,7 @@ const (
 	CodePluginList          = "plugin_list_failed"
 	CodePluginNotRegistered = "plugin_not_registered"
 	CodePluginNotEffective  = "plugin_not_effective"
+	CodePluginVersion       = "plugin_version_mismatch"
 	CodeStatus              = "plugin_status_failed"
 	CodePluginABI           = "plugin_abi_mismatch"
 	CodePluginRPC           = "plugin_rpc_mismatch"
@@ -44,6 +47,7 @@ const (
 	CodeMarkerDuplicated    = "marker_duplicated"
 	CodeMarkerUnexpected    = "marker_unexpected"
 	CodeSelfTest            = "self_test_failed"
+	CodeScenario            = "scenario_failed"
 )
 
 type Options struct {
@@ -54,14 +58,16 @@ type Options struct {
 }
 
 type Report struct {
-	SchemaVersion    int    `json:"schema_version"`
-	Compatible       bool   `json:"compatible"`
-	Code             string `json:"code"`
-	PluginID         string `json:"plugin_id,omitempty"`
-	PluginVersion    string `json:"plugin_version,omitempty"`
-	MarkerCount      int    `json:"marker_count"`
-	ConfigGeneration uint64 `json:"config_generation,omitempty"`
-	ConfigDigest     string `json:"config_digest,omitempty"`
+	SchemaVersion    int      `json:"schema_version"`
+	Compatible       bool     `json:"compatible"`
+	Code             string   `json:"code"`
+	PluginID         string   `json:"plugin_id,omitempty"`
+	PluginVersion    string   `json:"plugin_version,omitempty"`
+	MarkerCount      int      `json:"marker_count"`
+	ConfigGeneration uint64   `json:"config_generation,omitempty"`
+	ConfigDigest     string   `json:"config_digest,omitempty"`
+	Scenarios        []string `json:"scenarios,omitempty"`
+	FailedScenario   string   `json:"failed_scenario,omitempty"`
 }
 
 func (report Report) JSON() []byte {

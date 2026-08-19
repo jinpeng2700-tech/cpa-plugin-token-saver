@@ -1,7 +1,7 @@
 package verifier
 
 const (
-	ApprovalSchemaVersion = 1
+	ApprovalSchemaVersion = 2
 	VerifierSchemaVersion = 1
 	FixtureRevision       = "v1"
 )

@@ -1,0 +1,15 @@
+[Unit]
+Description=CLIProxyAPI dedicated nftables network guard
+Before=cliproxyapi.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/cliproxyapi/cpa-network-guard.env
+ExecStartPre=/bin/sh -c '/usr/sbin/nft list table inet cpa_network_guard >/dev/null 2>&1 && /usr/sbin/nft delete table inet cpa_network_guard || true'
+ExecStart=/usr/sbin/nft -f /root/cliproxyapi/firewall/cpa-network-guard.nft
+ExecStartPost=/bin/sh -eu -c 'test -n "$${PODMAN_SUBNET-}"; /usr/sbin/nft add element inet cpa_network_guard podman_subnets "{ $${PODMAN_SUBNET} }"'
+ExecStop=/bin/sh -c '/usr/sbin/nft list table inet cpa_network_guard >/dev/null 2>&1 && /usr/sbin/nft delete table inet cpa_network_guard || true'
+
+[Install]
+WantedBy=default.target

@@ -1,6 +1,9 @@
 package probe
 
 import (
+	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,6 +54,43 @@ func TestMarkerCountRequiresExactlyOneStableMarker(t *testing.T) {
 				t.Fatalf("markerCount() = %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRequiredScenariosCoverFullPipeline(t *testing.T) {
+	want := "all-off,rtk,headroom-rewrite,headroom-timeout,caveman,ponytail,fixed-order"
+	if got := strings.Join(requiredScenarios, ","); got != want {
+		t.Fatalf("requiredScenarios = %q, want %q", got, want)
+	}
+}
+
+func TestMockCapturesStayBounded(t *testing.T) {
+	provider := &mockProvider{}
+	for _, body := range []string{
+		`{"model":"compat-model","messages":[{"role":"user","content":"first"}]}`,
+		`{"model":"compat-model","messages":[{"role":"user","content":"second"}]}`,
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(body))
+		request.Header.Set("Authorization", "Bearer compat-upstream-key-only")
+		provider.handleChat(httptest.NewRecorder(), request)
+	}
+	if got := len(provider.bodies); got != 1 {
+		t.Fatalf("provider retained %d request bodies, want 1", got)
+	}
+
+	headroom := &mockHeadroom{}
+	for _, body := range []string{
+		`{"model":"compat-model","messages":[{"role":"user","content":"dispatch"}]}`,
+		`{"model":"headroom-health-probe","messages":[]}`,
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/v1/compress", bytes.NewBufferString(body))
+		headroom.handleCompress(httptest.NewRecorder(), request)
+	}
+	if got := len(headroom.bodies); got != 1 {
+		t.Fatalf("headroom retained %d request bodies, want 1", got)
+	}
+	if got := messageContent(headroom.LastDispatchBody(), "user"); got != "dispatch" {
+		t.Fatalf("headroom last dispatch content = %q, want dispatch", got)
 	}
 }
 

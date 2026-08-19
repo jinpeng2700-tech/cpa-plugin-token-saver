@@ -20,6 +20,7 @@ type mockProvider struct {
 	mu       sync.Mutex
 	requests int
 	markers  int
+	bodies   [][]byte
 }
 
 func startMockProvider() (*mockProvider, bool) {
@@ -59,6 +60,23 @@ func (mock *mockProvider) Snapshot() (int, int) {
 	return mock.requests, mock.markers
 }
 
+func (mock *mockProvider) Reset() {
+	mock.mu.Lock()
+	mock.requests = 0
+	mock.markers = 0
+	mock.bodies = nil
+	mock.mu.Unlock()
+}
+
+func (mock *mockProvider) SingleBody() ([]byte, bool) {
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if mock.requests != 1 || len(mock.bodies) != 1 {
+		return nil, false
+	}
+	return append([]byte(nil), mock.bodies[0]...), true
+}
+
 func (mock *mockProvider) handleChat(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost || request.Header.Get("Authorization") != "Bearer compat-upstream-key-only" {
 		writer.WriteHeader(http.StatusUnauthorized)
@@ -72,6 +90,7 @@ func (mock *mockProvider) handleChat(writer http.ResponseWriter, request *http.R
 	mock.mu.Lock()
 	mock.requests++
 	mock.markers += markerCount(raw)
+	mock.bodies = append(mock.bodies[:0], append([]byte(nil), raw...))
 	mock.mu.Unlock()
 	writer.Header().Set("Content-Type", "application/json")
 	_, _ = writer.Write([]byte(`{"id":"chatcmpl-compat","object":"chat.completion","created":0,"model":"compat-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))

@@ -41,7 +41,7 @@ future_field: preserved
 	if registration.SchemaVersion != abi.RPCSchemaVersion {
 		t.Fatalf("schema_version = %d", registration.SchemaVersion)
 	}
-	if registration.Metadata.Name != "Token Saver" || registration.Metadata.Version != "0.1.0-dev" || registration.Metadata.Author != "Mr.King" {
+	if registration.Metadata.Name != "Token Saver" || registration.Metadata.Version != "1.0.1" || registration.Metadata.Author != "Mr.King" {
 		t.Fatalf("metadata = %#v", registration.Metadata)
 	}
 	if !registration.Capabilities.RequestNormalizer || !registration.Capabilities.ManagementAPI {
@@ -358,6 +358,51 @@ func TestShutdownRejectsNewDispatchAndKeepsOutstandingBuffersFreeable(t *testing
 }
 
 func TestDynamicABIHostSubprocess(t *testing.T) {
+	pluginPath, hostPath := buildDynamicABIArtifacts(t)
+	report, errRun := runDynamicABIHost(hostPath, pluginPath)
+	if errRun != nil {
+		t.Fatal(errRun)
+	}
+	requireDynamicABIReport(t, report)
+}
+
+func TestDynamicABIHostSubprocessStress(t *testing.T) {
+	pluginPath, hostPath := buildDynamicABIArtifacts(t)
+	const processes = 16
+	errCh := make(chan error, processes)
+	var wg sync.WaitGroup
+	for index := 0; index < processes; index++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			report, errRun := runDynamicABIHost(hostPath, pluginPath)
+			if errRun == nil {
+				errRun = validateDynamicABIReport(report)
+			}
+			errCh <- errRun
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for errRun := range errCh {
+		if errRun != nil {
+			t.Fatal(errRun)
+		}
+	}
+}
+
+type dynamicABIReport struct {
+	ABIVersion              uint32 `json:"abi_version"`
+	RegistrationOK          bool   `json:"registration_ok"`
+	NormalizeByteIdentical  bool   `json:"normalize_byte_identical"`
+	ManagementRoutesOK      bool   `json:"management_routes_ok"`
+	ManagementHandleOK      bool   `json:"management_handle_ok"`
+	OutstandingSurvivedStop bool   `json:"outstanding_survived_shutdown"`
+	PostShutdownCode        string `json:"post_shutdown_code"`
+}
+
+func buildDynamicABIArtifacts(t *testing.T) (string, string) {
+	t.Helper()
 	if runtime.GOOS != "linux" {
 		t.Skip("platform limitation: the cgo dlopen ABI host runs in Linux CI; portable runtime/buffer tests cover Windows")
 	}
@@ -375,28 +420,35 @@ func TestDynamicABIHostSubprocess(t *testing.T) {
 	hostPath := filepath.Join(outputDir, "abi-host")
 	runCommand(t, repoRoot, goTool, "build", "-buildmode=c-shared", "-o", pluginPath, ".")
 	runCommand(t, repoRoot, goTool, "build", "-o", hostPath, "./test/abi-host")
+	return pluginPath, hostPath
+}
 
+func runDynamicABIHost(hostPath, pluginPath string) (dynamicABIReport, error) {
 	command := exec.Command(hostPath, pluginPath)
 	output, errRun := command.CombinedOutput()
 	if errRun != nil {
-		t.Fatalf("ABI host subprocess failed: %v\n%s", errRun, output)
+		return dynamicABIReport{}, fmt.Errorf("ABI host subprocess failed: %w\n%s", errRun, output)
 	}
-	var report struct {
-		ABIVersion              uint32 `json:"abi_version"`
-		RegistrationOK          bool   `json:"registration_ok"`
-		NormalizeByteIdentical  bool   `json:"normalize_byte_identical"`
-		ManagementRoutesOK      bool   `json:"management_routes_ok"`
-		ManagementHandleOK      bool   `json:"management_handle_ok"`
-		OutstandingSurvivedStop bool   `json:"outstanding_survived_shutdown"`
-		PostShutdownCode        string `json:"post_shutdown_code"`
-	}
+	var report dynamicABIReport
 	if errDecode := json.Unmarshal(output, &report); errDecode != nil {
-		t.Fatalf("decode ABI host report: %v\n%s", errDecode, output)
+		return dynamicABIReport{}, fmt.Errorf("decode ABI host report: %w\n%s", errDecode, output)
 	}
+	return report, nil
+}
+
+func requireDynamicABIReport(t *testing.T, report dynamicABIReport) {
+	t.Helper()
+	if errReport := validateDynamicABIReport(report); errReport != nil {
+		t.Fatal(errReport)
+	}
+}
+
+func validateDynamicABIReport(report dynamicABIReport) error {
 	if report.ABIVersion != abi.ABIVersion || !report.RegistrationOK || !report.NormalizeByteIdentical ||
 		!report.ManagementRoutesOK || !report.ManagementHandleOK || !report.OutstandingSurvivedStop || report.PostShutdownCode != "plugin_shutdown" {
-		t.Fatalf("ABI host report = %#v", report)
+		return fmt.Errorf("ABI host report = %#v", report)
 	}
+	return nil
 }
 
 func lifecycleJSON(t *testing.T, configYAML []byte) []byte {

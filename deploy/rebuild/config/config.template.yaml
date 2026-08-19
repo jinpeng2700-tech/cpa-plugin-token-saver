@@ -1,0 +1,29 @@
+host: 127.0.0.1
+port: 8317
+auth-dir: /root/cliproxyapi/state/auth
+api-keys:
+  - REPLACE_WITH_NEW_CLIENT_API_KEY
+
+remote-management:
+  allow-remote: true
+  secret-key: REPLACE_WITH_NEW_MANAGEMENT_KEY
+  disable-auto-update-panel: true
+
+plugins:
+  enabled: true
+  dir: /root/cliproxyapi/plugins
+  configs:
+    token-saver:
+      enabled: true
+      priority: -100
+      rtk_enabled: false
+      headroom_enabled: false
+      headroom_url: http://127.0.0.1:8787
+      headroom_timeout_ms: 1500
+      # Caveman/Ponytail：提示式精简，非保证节省。
+      caveman_enabled: false
+      caveman_level: lite
+      ponytail_enabled: false
+      ponytail_level: lite
+      model_allowlist:
+        - REPLACE_WITH_ONE_EXACT_MODEL_ID

@@ -9,7 +9,7 @@ import (
 func TestRunRejectsCredentialFlagWithoutEchoingValue(t *testing.T) {
 	sentinel := "MANAGEMENT_SENTINEL_DO_NOT_LEAK"
 	var output bytes.Buffer
-	exitCode := run([]string{"-credential", sentinel}, &output)
+	exitCode := run([]string{"-credential", sentinel}, strings.NewReader(""), &output)
 	if exitCode == 0 {
 		t.Fatal("run accepted a management credential flag")
 	}

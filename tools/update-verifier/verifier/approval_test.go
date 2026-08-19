@@ -10,18 +10,18 @@ func validApproval() Approval {
 		SchemaVersion:  ApprovalSchemaVersion,
 		VerifierSchema: VerifierSchemaVersion,
 		CLI: ApprovedCLI{
-			Version: "v7.2.133",
+			Version: "v7.2.136",
 			SHA256:  strings.Repeat("a", 64),
 			Arch:    "linux-amd64",
 		},
 		Plugin: ApprovedPlugin{
-			Version: "1.2.3",
+			Version: "1.0.1",
 			SHA256:  strings.Repeat("b", 64),
 			ABI:     1,
 			RPC:     3,
 		},
 		Panel: ApprovedPanel{
-			Version: "1.2.3",
+			Version: "e11b5f29",
 			SHA256:  strings.Repeat("c", 64),
 		},
 	}
@@ -29,7 +29,7 @@ func validApproval() Approval {
 
 func TestParseApprovalRejectsMissingInvalidAndUnknownData(t *testing.T) {
 	valid := validApproval()
-	validJSON := `{"schema_version":1,"verifier_schema":1,"cli":{"version":"v7.2.133","sha256":"` + valid.CLI.SHA256 + `","arch":"linux-amd64"},"plugin":{"version":"1.2.3","sha256":"` + valid.Plugin.SHA256 + `","abi":1,"rpc":3},"panel":{"version":"1.2.3","sha256":"` + valid.Panel.SHA256 + `"}}`
+	validJSON := `{"schema_version":2,"verifier_schema":1,"bundle":{"deployment_id":"test-7.2.136-1.0.1","source_commit":"7be5a808","builder_digest":"sha256:` + strings.Repeat("1", 64) + `"},"cli":{"tag":"v7.2.136","archive_sha256":"8f9160982bc2f26142f7b76a73fcc50f954c453470d5a6aefa81324ad18da288","binary_sha256":"` + valid.CLI.SHA256 + `","arch":"linux-amd64"},"plugin":{"id":"token-saver","version":"1.0.1","abi":1,"rpc_schema":3,"source_commit":"7be5a808","builder_digest":"sha256:` + strings.Repeat("1", 64) + `","glibc_max":"2.3.2","sha256":"` + valid.Plugin.SHA256 + `"},"panel":{"source_commit":"e11b5f29","builder_digest":"sha256:` + strings.Repeat("2", 64) + `","sha256":"` + valid.Panel.SHA256 + `"},"files":[{"path":"cli-proxy-api","sha256":"` + valid.CLI.SHA256 + `","mode":"0700"},{"path":"plugins/linux/amd64/token-saver-v1.0.1.so","sha256":"` + valid.Plugin.SHA256 + `","mode":"0700"},{"path":"static/management.html","sha256":"` + valid.Panel.SHA256 + `","mode":"0600"}],"manifest_exclusions":["approved-artifacts.json","SHA256SUMS"]}`
 
 	for _, tt := range []struct {
 		name string
@@ -39,7 +39,7 @@ func TestParseApprovalRejectsMissingInvalidAndUnknownData(t *testing.T) {
 		{name: "missing", raw: "", code: CodeApprovalInvalid},
 		{name: "malformed", raw: "{", code: CodeApprovalInvalid},
 		{name: "unknown field", raw: strings.TrimSuffix(validJSON, "}") + `,"transport_checksum":"self-authorizing"}`, code: CodeApprovalInvalid},
-		{name: "approval schema", raw: strings.Replace(validJSON, `"schema_version":1`, `"schema_version":2`, 1), code: CodeApprovalSchema},
+		{name: "approval schema", raw: strings.Replace(validJSON, `"schema_version":2`, `"schema_version":3`, 1), code: CodeApprovalSchema},
 		{name: "verifier schema", raw: strings.Replace(validJSON, `"verifier_schema":1`, `"verifier_schema":2`, 1), code: CodeVerifierSchema},
 		{name: "wrong ABI", raw: strings.Replace(validJSON, `"abi":1`, `"abi":2`, 1), code: CodeApprovalABI},
 		{name: "bad hash", raw: strings.Replace(validJSON, valid.Plugin.SHA256, "not-a-hash", 1), code: CodeApprovalInvalid},

@@ -1,6 +1,7 @@
 package verifier
 
 import (
+	"bytes"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -54,5 +55,25 @@ func TestReadCredentialReturnsStableCodesWithoutSecret(t *testing.T) {
 				t.Fatalf("stable code leaked secret: %q", code)
 			}
 		})
+	}
+}
+
+func TestReadCredentialFromStdinAcceptsOneSecretLine(t *testing.T) {
+	const sentinel = "MANAGEMENT_SENTINEL_DO_NOT_LEAK"
+	credential, code := ReadCredentialFrom(bytes.NewBufferString(sentinel + "\n"))
+	if credential != sentinel || code != CodeOK {
+		t.Fatalf("ReadCredentialFrom() = %q, %q", credential, code)
+	}
+}
+
+func TestReadCredentialFromStdinRejectsMultilineAndOversizedInput(t *testing.T) {
+	for _, payload := range []string{
+		"TOP_SECRET\nSECOND\n",
+		strings.Repeat("x", maxCredentialBytes+1),
+	} {
+		credential, code := ReadCredentialFrom(strings.NewReader(payload))
+		if credential != "" || code != CodeCredentialInvalid {
+			t.Fatalf("ReadCredentialFrom() = %q, %q; want empty, %q", credential, code, CodeCredentialInvalid)
+		}
 	}
 }

@@ -12,10 +12,10 @@ import (
 )
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout))
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout))
 }
 
-func run(args []string, output io.Writer) int {
+func run(args []string, input io.Reader, output io.Writer) int {
 	flags := flag.NewFlagSet("update-verifier", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	baseURL := flags.String("base-url", "http://127.0.0.1:8317", "literal-loopback CLIProxyAPI base URL")
@@ -24,6 +24,7 @@ func run(args []string, output io.Writer) int {
 	pluginPath := flags.String("plugin", "", "installed Token Saver shared library")
 	panelPath := flags.String("panel", "", "installed management panel")
 	phaseValue := flags.String("phase", string(verifier.PhasePreflight), "preflight or postinstall")
+	credentialStdin := flags.Bool("credential-stdin", false, "read management credential from stdin")
 	if errParse := flags.Parse(args); errParse != nil || flags.NArg() != 0 {
 		return writeResult(output, blockedResult(verifier.CodeApprovalInvalid))
 	}
@@ -35,7 +36,13 @@ func run(args []string, output io.Writer) int {
 	if approvalCode != verifier.CodeOK {
 		return writeResult(output, blockedResult(approvalCode))
 	}
-	credential, credentialCode := verifier.LoadCredential()
+	var credential string
+	var credentialCode string
+	if *credentialStdin {
+		credential, credentialCode = verifier.ReadCredentialFrom(input)
+	} else {
+		credential, credentialCode = verifier.LoadCredential()
+	}
 	if credentialCode != verifier.CodeOK {
 		return writeResult(output, blockedResult(credentialCode))
 	}

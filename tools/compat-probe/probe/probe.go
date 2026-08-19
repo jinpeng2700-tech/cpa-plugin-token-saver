@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -26,6 +27,16 @@ const (
 	maxPluginBytes      = 512 << 20
 	maxHTTPBody         = 2 << 20
 )
+
+var requiredScenarios = []string{
+	"all-off",
+	"rtk",
+	"headroom-rewrite",
+	"headroom-timeout",
+	"caveman",
+	"ponytail",
+	"fixed-order",
+}
 
 type candidateProcess struct {
 	command *exec.Cmd
@@ -110,6 +121,11 @@ func Run(parent context.Context, options Options) Report {
 		return failure(CodeTemporaryState)
 	}
 	defer mock.Close()
+	headroomMock, okHeadroomMock := startMockHeadroom()
+	if !okHeadroomMock {
+		return failure(CodeTemporaryState)
+	}
+	defer headroomMock.Close()
 
 	pluginsDir := filepath.Join(temporaryRoot, "plugins")
 	pluginInstallDir := filepath.Join(pluginsDir, runtime.GOOS, runtime.GOARCH)
@@ -125,7 +141,7 @@ func Run(parent context.Context, options Options) Report {
 		return failure(CodeTemporaryState)
 	}
 	configPath := filepath.Join(temporaryRoot, "config.yaml")
-	if !writeCandidateConfig(configPath, temporaryRoot, pluginsDir, port, mock.URL(), true) {
+	if !writeCandidateConfig(configPath, temporaryRoot, pluginsDir, port, mock.URL(), headroomMock.URL(), true) {
 		return failure(CodeTemporaryState)
 	}
 
@@ -151,6 +167,9 @@ func Run(parent context.Context, options Options) Report {
 	if !pluginState.EffectiveEnabled {
 		return failure(CodePluginNotEffective)
 	}
+	if pluginState.Version != RequiredVersion {
+		return failure(CodePluginVersion)
+	}
 
 	statusURL := baseURL + "/v0/management/plugins/token-saver/status"
 	var initialStatus managementStatus
@@ -165,45 +184,18 @@ func Run(parent context.Context, options Options) Report {
 	if outcome := jsonRequest(ctx, client, http.MethodGet, configURL, compatManagementKey, nil, &currentConfig); outcome != httpOK {
 		return failure(httpCode(outcome, CodeConfigGet))
 	}
-	currentConfig["caveman_enabled"] = true
-	currentConfig["caveman_level"] = "lite"
-	desiredRaw, errDesired := json.Marshal(currentConfig)
-	if errDesired != nil {
-		return failure(CodeConfigPatch)
-	}
-	desiredConfig, errParseConfig := pluginconfig.Parse(desiredRaw)
-	if errParseConfig != nil {
-		return failure(CodeConfigPatch)
-	}
-	desiredDigest := pluginconfig.Digest(desiredConfig)
-	patch := []byte(`{"caveman_enabled":true,"caveman_level":"lite"}`)
-	if outcome := jsonRequest(ctx, client, http.MethodPatch, configURL, compatManagementKey, patch, nil); outcome != httpOK {
-		return failure(httpCode(outcome, CodeConfigPatch))
-	}
-	appliedStatus, codeApplied := waitForAppliedConfig(ctx, client, statusURL, process, initialStatus.ConfigGeneration, desiredDigest)
-	if codeApplied != CodeOK {
-		return failure(codeApplied)
-	}
-	var appliedConfig map[string]any
-	if outcome := jsonRequest(ctx, client, http.MethodGet, configURL, compatManagementKey, nil, &appliedConfig); outcome != httpOK ||
-		appliedConfig["caveman_enabled"] != true || appliedConfig["caveman_level"] != "lite" {
-		return failure(httpCode(outcome, CodeConfigGet))
-	}
-
-	chatBody := []byte(`{"model":"compat-model","messages":[{"role":"user","content":"bounded compatibility fixture"}],"stream":false}`)
-	var chatResponse map[string]any
-	if outcome := jsonRequest(ctx, client, http.MethodPost, baseURL+"/v1/chat/completions", compatClientKey, chatBody, &chatResponse); outcome != httpOK {
-		return failure(CodeDispatch)
-	}
-	requestCount, markers := mock.Snapshot()
-	if requestCount != 1 {
-		return Report{SchemaVersion: SchemaVersion, Code: CodeDispatch, PluginID: RequiredPlugin, MarkerCount: markers}
-	}
-	if markers == 0 {
-		return Report{SchemaVersion: SchemaVersion, Code: CodeMarkerAbsent, PluginID: RequiredPlugin}
-	}
-	if markers != 1 {
-		return Report{SchemaVersion: SchemaVersion, Code: CodeMarkerDuplicated, PluginID: RequiredPlugin, MarkerCount: markers}
+	appliedStatus, scenarios, failedScenario, scenarioCode := runRequiredScenarios(
+		ctx, client, baseURL, configURL, statusURL, process, currentConfig, initialStatus, mock, headroomMock,
+	)
+	if scenarioCode != CodeOK {
+		return Report{
+			SchemaVersion:  SchemaVersion,
+			Code:           scenarioCode,
+			PluginID:       RequiredPlugin,
+			PluginVersion:  pluginState.Version,
+			Scenarios:      scenarios,
+			FailedScenario: failedScenario,
+		}
 	}
 
 	var selfTest selfTestResponse
@@ -213,9 +205,262 @@ func Run(parent context.Context, options Options) Report {
 	}
 	return Report{
 		SchemaVersion: SchemaVersion, Compatible: true, Code: CodeOK,
-		PluginID: RequiredPlugin, PluginVersion: pluginState.Version, MarkerCount: markers,
+		PluginID: RequiredPlugin, PluginVersion: pluginState.Version, MarkerCount: 1,
 		ConfigGeneration: appliedStatus.ConfigGeneration, ConfigDigest: appliedStatus.ConfigDigest,
+		Scenarios: scenarios,
 	}
+}
+
+func runRequiredScenarios(
+	ctx context.Context,
+	client *http.Client,
+	baseURL, configURL, statusURL string,
+	process *candidateProcess,
+	currentConfig map[string]any,
+	initialStatus managementStatus,
+	provider *mockProvider,
+	headroomMock *mockHeadroom,
+) (managementStatus, []string, string, string) {
+	status := initialStatus
+	completed := make([]string, 0, len(requiredScenarios))
+	failureCode := CodeScenario
+	run := func(name string, mode mockHeadroomMode, patch map[string]any, body []byte, verify func([]byte, []byte) bool) bool {
+		headroomMock.SetMode(mode)
+		nextStatus, code := applyProbeConfig(ctx, client, configURL, statusURL, process, currentConfig, status, patch)
+		if code != CodeOK {
+			status = nextStatus
+			failureCode = code
+			return false
+		}
+		status = nextStatus
+		provider.Reset()
+		headroomMock.SetMode(mode)
+		providerBody, codeDispatch := dispatchProbe(ctx, client, baseURL, provider, body)
+		if codeDispatch != CodeOK {
+			failureCode = codeDispatch
+			return false
+		}
+		if !verify(providerBody, headroomMock.LastDispatchBody()) {
+			return false
+		}
+		completed = append(completed, name)
+		return true
+	}
+
+	allOffBody := simpleChatFixture("all-off-original")
+	if !run("all-off", mockHeadroomRewrite, scenarioPatch(headroomMock.URL(), 1500, false, false, false, false), allOffBody,
+		func(providerBody, _ []byte) bool {
+			return messageContent(providerBody, "user") == "all-off-original" &&
+				bytes.Count(providerBody, []byte(CavemanMarker)) == 0 &&
+				bytes.Count(providerBody, []byte(PonytailMarker)) == 0
+		}) {
+		return status, completed, "all-off", failureCode
+	}
+
+	rtkBody, rtkOriginal := rtkChatFixture("rtk-user")
+	if !run("rtk", mockHeadroomRewrite, scenarioPatch(headroomMock.URL(), 1500, true, false, false, false), rtkBody,
+		func(providerBody, _ []byte) bool { return validRTKResult(providerBody, rtkOriginal) }) {
+		return status, completed, "rtk", failureCode
+	}
+
+	if !run("headroom-rewrite", mockHeadroomRewrite, scenarioPatch(headroomMock.URL(), 1500, false, true, false, false),
+		simpleChatFixture("headroom-original"),
+		func(providerBody, headroomBody []byte) bool {
+			return len(headroomBody) > 0 && messageContent(providerBody, "user") == "headroom-rewritten"
+		}) {
+		return status, completed, "headroom-rewrite", failureCode
+	}
+
+	if !run("headroom-timeout", mockHeadroomTimeout, scenarioPatch(headroomMock.URL(), 100, false, true, false, false),
+		simpleChatFixture("headroom-timeout-original"),
+		func(providerBody, headroomBody []byte) bool {
+			return len(headroomBody) > 0 && messageContent(providerBody, "user") == "headroom-timeout-original"
+		}) {
+		return status, completed, "headroom-timeout", failureCode
+	}
+
+	if !run("caveman", mockHeadroomRewrite, scenarioPatch(headroomMock.URL(), 1500, false, false, true, false),
+		simpleChatFixture("caveman-user"),
+		func(providerBody, _ []byte) bool {
+			return bytes.Count(providerBody, []byte(CavemanMarker)) == 1 &&
+				bytes.Count(providerBody, []byte(PonytailMarker)) == 0
+		}) {
+		return status, completed, "caveman", failureCode
+	}
+
+	if !run("ponytail", mockHeadroomRewrite, scenarioPatch(headroomMock.URL(), 1500, false, false, false, true),
+		simpleChatFixture("ponytail-user"),
+		func(providerBody, _ []byte) bool {
+			return bytes.Count(providerBody, []byte(CavemanMarker)) == 0 &&
+				bytes.Count(providerBody, []byte(PonytailMarker)) == 1
+		}) {
+		return status, completed, "ponytail", failureCode
+	}
+
+	fixedBody, fixedOriginal := rtkChatFixture("fixed-order-user")
+	if !run("fixed-order", mockHeadroomRewrite, scenarioPatch(headroomMock.URL(), 1500, true, true, true, true), fixedBody,
+		func(providerBody, headroomBody []byte) bool {
+			cavemanIndex := bytes.Index(providerBody, []byte(CavemanMarker))
+			ponytailIndex := bytes.Index(providerBody, []byte(PonytailMarker))
+			return validRTKResult(headroomBody, fixedOriginal) &&
+				messageContent(providerBody, "user") == "headroom-rewritten" &&
+				cavemanIndex >= 0 && ponytailIndex > cavemanIndex &&
+				bytes.Count(providerBody, []byte(CavemanMarker)) == 1 &&
+				bytes.Count(providerBody, []byte(PonytailMarker)) == 1
+		}) {
+		return status, completed, "fixed-order", failureCode
+	}
+
+	return status, completed, "", CodeOK
+}
+
+func scenarioPatch(headroomURL string, timeoutMS int, rtkEnabled, headroomEnabled, cavemanEnabled, ponytailEnabled bool) map[string]any {
+	return map[string]any{
+		"rtk_enabled":         rtkEnabled,
+		"headroom_enabled":    headroomEnabled,
+		"headroom_url":        headroomURL,
+		"headroom_timeout_ms": timeoutMS,
+		"caveman_enabled":     cavemanEnabled,
+		"caveman_level":       "lite",
+		"ponytail_enabled":    ponytailEnabled,
+		"ponytail_level":      "lite",
+		"model_allowlist":     []string{compatModel},
+	}
+}
+
+func applyProbeConfig(
+	ctx context.Context,
+	client *http.Client,
+	configURL, statusURL string,
+	process *candidateProcess,
+	currentConfig map[string]any,
+	previousStatus managementStatus,
+	patch map[string]any,
+) (managementStatus, string) {
+	for key, value := range patch {
+		currentConfig[key] = value
+	}
+	desiredRaw, errDesired := json.Marshal(currentConfig)
+	if errDesired != nil {
+		return previousStatus, CodeConfigPatch
+	}
+	desiredConfig, errParseConfig := pluginconfig.Parse(desiredRaw)
+	if errParseConfig != nil {
+		return previousStatus, CodeConfigPatch
+	}
+	patchRaw, errPatch := json.Marshal(patch)
+	if errPatch != nil {
+		return previousStatus, CodeConfigPatch
+	}
+	if outcome := jsonRequest(ctx, client, http.MethodPatch, configURL, compatManagementKey, patchRaw, nil); outcome != httpOK {
+		return previousStatus, httpCode(outcome, CodeConfigPatch)
+	}
+	return waitForAppliedConfig(ctx, client, statusURL, process, previousStatus.ConfigGeneration, pluginconfig.Digest(desiredConfig))
+}
+
+func dispatchProbe(ctx context.Context, client *http.Client, baseURL string, provider *mockProvider, body []byte) ([]byte, string) {
+	var response map[string]any
+	if outcome := jsonRequest(ctx, client, http.MethodPost, baseURL+"/v1/chat/completions", compatClientKey, body, &response); outcome != httpOK {
+		return nil, CodeDispatch
+	}
+	body, ok := provider.SingleBody()
+	if !ok {
+		return nil, CodeDispatch
+	}
+	return body, CodeOK
+}
+
+func simpleChatFixture(content string) []byte {
+	raw, _ := json.Marshal(map[string]any{
+		"model": compatModel,
+		"messages": []map[string]any{
+			{"role": "user", "content": content},
+		},
+		"stream": false,
+	})
+	return raw
+}
+
+func rtkChatFixture(userContent string) ([]byte, string) {
+	var diff strings.Builder
+	diff.WriteString("diff --git a/compat.go b/compat.go\n--- a/compat.go\n+++ b/compat.go\n@@ -1 +1 @@\n")
+	for index := 0; index < 120; index++ {
+		fmt.Fprintf(&diff, "+compatibility line %03d %s\n", index, strings.Repeat("x", 32))
+	}
+	original := diff.String()
+	raw, _ := json.Marshal(map[string]any{
+		"model": compatModel,
+		"messages": []map[string]any{
+			{"role": "user", "content": userContent},
+			{
+				"role":    "assistant",
+				"content": nil,
+				"tool_calls": []map[string]any{
+					{"id": "call_ok", "type": "function", "function": map[string]any{"name": "run", "arguments": "{}"}},
+					{"id": "call_err", "type": "function", "function": map[string]any{"name": "run", "arguments": "{}"}},
+				},
+			},
+			{"role": "tool", "tool_call_id": "call_ok", "content": original},
+			{"role": "tool", "tool_call_id": "call_err", "content": original, "is_error": true},
+		},
+		"stream": false,
+	})
+	return raw, original
+}
+
+type probeMessage struct {
+	Role       string          `json:"role"`
+	Content    json.RawMessage `json:"content"`
+	ToolCallID string          `json:"tool_call_id"`
+	IsError    bool            `json:"is_error"`
+}
+
+func probeMessages(raw []byte) ([]probeMessage, bool) {
+	var envelope struct {
+		Messages []probeMessage `json:"messages"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil || envelope.Messages == nil {
+		return nil, false
+	}
+	return envelope.Messages, true
+}
+
+func messageContent(raw []byte, role string) string {
+	messages, ok := probeMessages(raw)
+	if !ok {
+		return ""
+	}
+	for _, message := range messages {
+		if message.Role != role {
+			continue
+		}
+		var content string
+		if json.Unmarshal(message.Content, &content) == nil {
+			return content
+		}
+	}
+	return ""
+}
+
+func validRTKResult(raw []byte, original string) bool {
+	messages, ok := probeMessages(raw)
+	if !ok {
+		return false
+	}
+	tools := make([]probeMessage, 0, 2)
+	for _, message := range messages {
+		if message.Role == "tool" {
+			tools = append(tools, message)
+		}
+	}
+	if len(tools) != 2 || tools[0].ToolCallID != "call_ok" || tools[1].ToolCallID != "call_err" || tools[0].IsError || !tools[1].IsError {
+		return false
+	}
+	var compressed, failed string
+	if json.Unmarshal(tools[0].Content, &compressed) != nil || json.Unmarshal(tools[1].Content, &failed) != nil {
+		return false
+	}
+	return len(compressed) < len(original) && failed == original
 }
 
 func runCoreOnly(ctx context.Context, candidatePath string) Report {
@@ -240,7 +485,7 @@ func runCoreOnly(ctx context.Context, candidatePath string) Report {
 		return failure(CodeTemporaryState)
 	}
 	configPath := filepath.Join(temporaryRoot, "config.yaml")
-	if !writeCandidateConfig(configPath, temporaryRoot, pluginsDir, port, mock.URL(), false) {
+	if !writeCandidateConfig(configPath, temporaryRoot, pluginsDir, port, mock.URL(), "", false) {
 		return failure(CodeTemporaryState)
 	}
 
@@ -501,7 +746,7 @@ func waitForAppliedConfig(parent context.Context, client *http.Client, statusURL
 	}
 }
 
-func writeCandidateConfig(path, temporaryRoot, pluginsDir string, port int, providerURL string, pluginEnabled bool) bool {
+func writeCandidateConfig(path, temporaryRoot, pluginsDir string, port int, providerURL, headroomURL string, pluginEnabled bool) bool {
 	type remoteManagement struct {
 		AllowRemote            bool   `yaml:"allow-remote"`
 		SecretKey              string `yaml:"secret-key"`
@@ -544,7 +789,7 @@ func writeCandidateConfig(path, temporaryRoot, pluginsDir string, port int, prov
 	if pluginEnabled {
 		pluginConfigs[RequiredPlugin] = map[string]any{
 			"enabled": true, "priority": -100,
-			"rtk_enabled": false, "headroom_enabled": false,
+			"rtk_enabled": false, "headroom_enabled": false, "headroom_url": headroomURL, "headroom_timeout_ms": 1500,
 			"caveman_enabled": false, "caveman_level": "lite",
 			"ponytail_enabled": false, "ponytail_level": "lite",
 			"model_allowlist": []string{compatModel},
