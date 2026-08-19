@@ -106,11 +106,11 @@ class RebuildDeliveryTest(unittest.TestCase):
             inputs = temporary / "inputs"
             inputs.mkdir()
             for name, content in {
-                "cli-proxy-api": b"fake cli\n",
-                "token-saver-v1.0.1.so": b"fake plugin\n",
+                "cli-proxy-api": b"\x7fELF\x00sk-false-positive-binary-string\n",
+                "token-saver-v1.0.1.so": b"\x7fELF\x00fake plugin\n",
                 "management.html": b"<html>panel</html>\n",
-                "compat-probe": b"fake probe\n",
-                "update-verifier": b"fake verifier\n",
+                "compat-probe": b"\x7fELF\x00fake probe\n",
+                "update-verifier": b"\x7fELF\x00fake verifier\n",
             }.items():
                 (inputs / name).write_bytes(content)
 

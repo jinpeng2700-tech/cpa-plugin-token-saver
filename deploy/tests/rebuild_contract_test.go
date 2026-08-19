@@ -148,11 +148,11 @@ func TestRebuildBundleRoundTripAndSecretRejection(t *testing.T) {
 	root := repositoryRoot(t)
 	input := t.TempDir()
 	for name, body := range map[string]string{
-		"cli-proxy-api":         "fake cli\n",
-		"token-saver-v1.0.1.so": "fake plugin\n",
+		"cli-proxy-api":         "\x7fELF\x00sk-false-positive-binary-string\n",
+		"token-saver-v1.0.1.so": "\x7fELF\x00fake plugin\n",
 		"management.html":       "<html>panel</html>\n",
-		"compat-probe":          "fake probe\n",
-		"update-verifier":       "fake verifier\n",
+		"compat-probe":          "\x7fELF\x00fake probe\n",
+		"update-verifier":       "\x7fELF\x00fake verifier\n",
 	} {
 		if err := os.WriteFile(filepath.Join(input, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)

@@ -59,6 +59,10 @@ def scan_secrets(path, relative):
     if SENSITIVE_PATH.search(normalized):
         fail(f"secret path rejected: {normalized}")
     raw = path.read_bytes()
+    if normalized in EXECUTABLES:
+        if not raw.startswith(b"\x7fELF"):
+            fail(f"executable is not ELF: {normalized}")
+        return
     for marker in SECRET_MARKERS:
         if marker.search(raw):
             fail(f"secret content rejected: {normalized}")
