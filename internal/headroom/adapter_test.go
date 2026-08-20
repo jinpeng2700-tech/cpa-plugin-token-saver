@@ -67,8 +67,11 @@ func TestAdapterResponsesMessageOnlySuccess(t *testing.T) {
 	body := []byte(`{"model":"codex-test","input":[{"type":"message","role":"system","content":[{"type":"input_text","text":"keep"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"long"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"history"}],"status":"completed"}],"parallel_tool_calls":true}`)
 	adapter, closeServer := adapterWithHandler(t, func(writer http.ResponseWriter, request *http.Request) {
 		messages := readWireMessages(t, request)
-		setMessageContent(t, messages[1], 0, "short")
-		setMessageContent(t, messages[2], 0, "brief")
+		if content := messages[0].(map[string]any)["content"]; content != "keep" {
+			t.Fatalf("single Responses block was not flattened: %#v", content)
+		}
+		setMessageStringContent(t, messages[1], "short")
+		setMessageStringContent(t, messages[2], "brief")
 		writeMessages(t, writer, messages)
 	})
 	defer closeServer()

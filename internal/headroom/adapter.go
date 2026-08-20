@@ -202,6 +202,29 @@ func projectResponses(body []byte) (*projection, error) {
 				}
 			}
 		case []any:
+			if len(typed) == 1 {
+				block, okBlock := typed[0].(map[string]any)
+				if !okBlock {
+					return nil, fmt.Errorf("Responses block is not an object")
+				}
+				blockType, _ := block["type"].(string)
+				if blockType != "input_text" && blockType != "output_text" {
+					return nil, fmt.Errorf("unsupported Responses block")
+				}
+				text, okText := block["text"].(string)
+				if !okText {
+					return nil, fmt.Errorf("Responses text block is missing text")
+				}
+				projected["content"] = text
+				view.messages = append(view.messages, projected)
+				if mutable {
+					path := fmt.Sprintf("input.%d.content.0.text", itemIndex)
+					if errTarget := view.addTarget(body, path, messageIndex, -1, text); errTarget != nil {
+						return nil, errTarget
+					}
+				}
+				continue
+			}
 			blocks := make([]any, 0, len(typed))
 			for blockIndex, rawBlock := range typed {
 				block, okBlock := rawBlock.(map[string]any)
