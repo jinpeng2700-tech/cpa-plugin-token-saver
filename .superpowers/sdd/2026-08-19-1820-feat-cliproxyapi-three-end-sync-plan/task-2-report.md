@@ -6,7 +6,7 @@ Implemented U2 from base commit `17c5fa9`.
 
 - No push, tag, GitHub release, VPS change, network change, or UI change was performed.
 - Release version remains the next stable identity `v1.0.1`; local and remote tag lookup returned no existing `v1.0.1`.
-- U2 does not add provenance attestation. This avoids annotated-tag commit ambiguity and leaves attestation policy to the later approval/promotion unit.
+- Fix round 1 adds release artifact provenance attestation after explicit event/build/metadata/remote-tag commit binding.
 
 ## Delivered behavior
 
@@ -55,7 +55,7 @@ Exact artifact set:
   - `actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff`
   - `actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02`
 - CI and release build/compatibility jobs are read-only.
-- Only final `publish` job has `contents: write`; it runs after compatibility, downloads the exact run-attempt artifact, verifies checksums/metadata, refuses an existing release, and uses `gh release create --verify-tag`.
+- Only final `publish` job has `contents: write`, `attestations: write`, and `id-token: write`; it runs after compatibility, downloads the exact run-attempt artifact, verifies checksums/metadata/commit identity, attests `dist/*`, refuses an existing release, and publishes the same `dist/*` set with `gh release create --verify-tag`.
 - No workflow uses `gh release upload`, `--clobber`, `source.tar.gz`, broad `dist/` upload, or arm64 artifacts.
 
 ## TDD evidence
@@ -182,7 +182,9 @@ Both hosts returned `compatible: true`; plugin dispatch reported version `1.0.1`
 - `Makefile`
 - `build/release.Dockerfile`
 - `scripts/archive-source.sh`
+- `scripts/release-container.sh`
 - `scripts/finalize-release.sh`
+- `scripts/verify-release-identity.sh`
 - `deploy/tests/build_contract_test.go`
 - `deploy/tests/release_workflow_test.go`
 - `docs/compatibility.md`
@@ -190,4 +192,53 @@ Both hosts returned `compatible: true`; plugin dispatch reported version `1.0.1`
 
 ## Remaining publication work
 
-Controller must create/push tag `v1.0.1` when authorized. This task intentionally did not push, tag, publish, or attest.
+Controller must create/push tag `v1.0.1` when authorized. This task intentionally did not push, tag, or publish; the release workflow will attest before publication.
+
+## Fix round 1 — review remediation
+
+### RED evidence
+
+After adding review regression tests, `go test -count=1 ./deploy/tests` failed for every reported gap:
+
+```text
+Makefile missing "scripts/release-container.sh"
+workflow executes release driver from the working tree
+release Dockerfile must not use a mutable frontend syntax tag
+repository committed release driver is missing
+verify-release-identity.sh: No such file
+PT_INTERP helper unexpectedly succeeded
+release workflow missing "v7.2.137"
+publish permission attestations = "", want "write"
+CI checkout persists credentials
+job is missing actions/attest-build-provenance action
+build output event_commit is not bound to release_identity
+job is missing "Download and verify official candidates without executing them" step
+```
+
+A separate RED tightened the duplicate `verify-release` gate:
+
+```text
+Makefile missing "! readelf -l '$(COMPAT_PROBE_OUT)' | grep -q 'INTERP'"
+Makefile missing "! readelf -l '$(UPDATE_VERIFIER_OUT)' | grep -q 'INTERP'"
+```
+
+### Fixes
+
+1. Added `actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be` in `publish`. Its `subject-path` is `dist/*`; release publication uses the same validated `dist/*`. Only `publish` receives `attestations: write` and `id-token: write`.
+2. Build resolves both `${GITHUB_SHA}^{commit}` and `HEAD^{commit}`. Publish uses `scripts/verify-release-identity.sh` to require event commit, build commit, metadata `source_commit`, and peeled remote tag commit to be identical before attestation or publication.
+3. Compatibility resolves exactly one official host asset and one `checksums.txt` asset, validates numeric positive asset IDs/sizes, downloads by asset ID, checks downloaded sizes, extracts exactly one official SHA-256 for the host asset, and verifies bytes before extraction/execution.
+4. Every checkout, including CI and publish, sets `persist-credentials: false`.
+5. CI and release no longer run `make release-container` from the working tree. They load `scripts/release-container.sh` with `git show HEAD:...`; that committed driver loads the committed archive helper and builds only the committed archive.
+6. Both `scripts/finalize-release.sh` and `make verify-release` reject helper `PT_INTERP` segments in addition to `NEEDED`.
+7. Removed mutable `# syntax=docker/dockerfile:1`. Updated fixed candidate/documentation from `v7.2.136`/stale `v7.2.134` text to `v7.2.137`, published August 19, 2026.
+
+### GREEN evidence
+
+- `go test -count=1 ./deploy/tests` — pass.
+- `scripts/check-notices.sh` — pass; all workflow actions remain pinned to full commit SHAs.
+- `sh deploy/tests/test-deploy.sh` — pass.
+- `sh deploy/tests/test-update-scripts.sh` — pass.
+- `python deploy/tests/test_rebuild.py` — 3 tests pass.
+- `python deploy/tests/test_pilot_fixtures.py` — pass.
+- Official `v7.2.137` release API identity observed: Linux amd64 asset ID `521198883`, size `21072175`; `checksums.txt` asset ID `521201615`, size `1094`.
+- Official `checksums.txt` binds `CLIProxyAPI_7.2.137_linux_amd64.tar.gz` to SHA-256 `ae68c776e124dbc8c8c5b86c501fc6906efa180cc5e35383adb26d05c2c91401`.

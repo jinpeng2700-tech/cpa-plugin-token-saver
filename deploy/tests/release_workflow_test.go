@@ -21,6 +21,7 @@ type releaseJob struct {
 }
 
 type releaseStep struct {
+	ID   string         `yaml:"id"`
 	Name string         `yaml:"name"`
 	Uses string         `yaml:"uses"`
 	Run  string         `yaml:"run"`
@@ -105,7 +106,7 @@ func TestReleaseWorkflowPublishesOnlyAfterReadOnlyCompatibility(t *testing.T) {
 	}
 	for name, job := range workflow.Jobs {
 		for permission, access := range job.Permissions {
-			if access == "write" && (name != "publish" || permission != "contents") {
+			if access == "write" && name != "publish" {
 				t.Fatalf("%s job has write permission %s", name, permission)
 			}
 		}
@@ -119,8 +120,15 @@ func TestReleaseWorkflowPublishesOnlyAfterReadOnlyCompatibility(t *testing.T) {
 	if !jobNeeds(compatibility, "build") {
 		t.Fatal("compatibility job must wait for build")
 	}
-	if publish.Permissions["contents"] != "write" || publish.Permissions["actions"] != "read" {
-		t.Fatal("publish job must have only contents write and actions read permissions")
+	for permission, want := range map[string]string{
+		"actions":      "read",
+		"attestations": "write",
+		"contents":     "write",
+		"id-token":     "write",
+	} {
+		if publish.Permissions[permission] != want {
+			t.Fatalf("publish permission %s = %q, want %q", permission, publish.Permissions[permission], want)
+		}
 	}
 	if !jobNeeds(publish, "compatibility") {
 		t.Fatal("publish job must wait for compatibility")
@@ -130,7 +138,7 @@ func TestReleaseWorkflowPublishesOnlyAfterReadOnlyCompatibility(t *testing.T) {
 	if !strings.Contains(compatibilityRun, "compat-probe") {
 		t.Fatal("read-only compatibility job must execute the downloaded candidate")
 	}
-	dispatch := requireNamedStep(t, compatibility, "Prove real host dispatch on baseline and fixed v7.2.136")
+	dispatch := requireNamedStep(t, compatibility, "Prove real host dispatch on baseline and fixed v7.2.137")
 	if !strings.Contains(dispatch.Run, `"$compat_probe" -candidate`) || !strings.Contains(dispatch.Run, "TestRealCandidate") {
 		t.Fatal("compatibility job must execute both compatibility probe and real host-dispatch tests")
 	}
@@ -180,6 +188,114 @@ func TestCIWorkflowUsesReadOnlyPermissions(t *testing.T) {
 			if access == "write" {
 				t.Fatalf("CI job %s has write permission %s", name, permission)
 			}
+		}
+	}
+}
+
+func TestAllWorkflowCheckoutsDisableCredentialPersistence(t *testing.T) {
+	for _, workflowPath := range []string{".github/workflows/ci.yml", ".github/workflows/release.yml"} {
+		var workflow releaseWorkflow
+		if err := yaml.Unmarshal([]byte(readRepositoryFile(t, workflowPath)), &workflow); err != nil {
+			t.Fatalf("parse %s: %v", workflowPath, err)
+		}
+		for name, job := range workflow.Jobs {
+			for _, step := range job.Steps {
+				if !strings.HasPrefix(step.Uses, "actions/checkout@") {
+					continue
+				}
+				if workflowValue(step.With, "persist-credentials") != "false" {
+					t.Errorf("%s job %s checkout persists credentials", workflowPath, name)
+				}
+			}
+		}
+	}
+}
+
+func TestReleaseWorkflowAttestsExactlyPublishedArtifacts(t *testing.T) {
+	publish := requireReleaseJob(t, readReleaseWorkflow(t), "publish")
+	attest := requireActionStep(t, publish, "actions/attest-build-provenance")
+	if attest.Uses != "actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be" {
+		t.Fatalf("attestation action = %q", attest.Uses)
+	}
+	if workflowValue(attest.With, "subject-path") != "dist/*" {
+		t.Fatalf("attestation subject = %q, want dist/*", workflowValue(attest.With, "subject-path"))
+	}
+
+	attestIndex, publishIndex := -1, -1
+	for index, step := range publish.Steps {
+		if step.Uses == attest.Uses {
+			attestIndex = index
+		}
+		if strings.Contains(step.Run, "gh release create") {
+			publishIndex = index
+			if !strings.Contains(step.Run, `gh release create "$GITHUB_REF_NAME" dist/*`) {
+				t.Fatal("published files must use the same validated dist/* set as attestation")
+			}
+		}
+	}
+	if attestIndex < 0 || publishIndex < 0 || attestIndex >= publishIndex {
+		t.Fatal("attestation must complete before release publication")
+	}
+}
+
+func TestReleaseWorkflowBindsEventBuildMetadataAndRemoteTagCommits(t *testing.T) {
+	workflow := readReleaseWorkflow(t)
+	build := requireReleaseJob(t, workflow, "build")
+	publish := requireReleaseJob(t, workflow, "publish")
+
+	for _, output := range []string{"event_commit", "source_commit"} {
+		if !strings.Contains(workflowValue(build.Outputs, output), "steps.release_identity.outputs."+output) {
+			t.Errorf("build output %s is not bound to release_identity", output)
+		}
+	}
+	identity := requireNamedStep(t, build, "Bind event and build commits")
+	for _, want := range []string{`"${GITHUB_SHA}^{commit}"`, "HEAD^{commit}", `"event_commit=$event_commit"`, `"source_commit=$source_commit"`} {
+		if !strings.Contains(identity.Run, want) {
+			t.Errorf("build identity step missing %q", want)
+		}
+	}
+	publishIdentity := requireNamedStep(t, publish, "Bind event, build, metadata, and remote tag commits")
+	for _, want := range []string{
+		"scripts/verify-release-identity.sh",
+		"needs.build.outputs.event_commit",
+		"needs.build.outputs.source_commit",
+		"release-metadata.json",
+		"GITHUB_REPOSITORY",
+		"GITHUB_REF_NAME",
+	} {
+		if !strings.Contains(publishIdentity.Run+fmt.Sprint(publishIdentity.Env), want) {
+			t.Errorf("publish identity step missing %q", want)
+		}
+	}
+}
+
+func TestReleaseWorkflowVerifiesOfficialHostIdentityBeforeExecution(t *testing.T) {
+	compatibility := requireReleaseJob(t, readReleaseWorkflow(t), "compatibility")
+	download := requireNamedStep(t, compatibility, "Download and verify official candidates without executing them")
+	for _, want := range []string{
+		`select(.name == $asset)`,
+		`select(.name == "checksums.txt")`,
+		".id",
+		".size",
+		"/releases/assets/${asset_id}",
+		"/releases/assets/${checksums_id}",
+		`stat -c '%s'`,
+		"official_sha256",
+		"sha256sum",
+		"candidate.tar.gz",
+		"checksums.txt",
+	} {
+		if !strings.Contains(download.Run, want) {
+			t.Errorf("official candidate verification missing %q", want)
+		}
+	}
+	for _, ordered := range [][2]string{
+		{"asset_id=", "candidate.tar.gz"},
+		{"asset_size=", "stat -c '%s'"},
+		{"official_sha256=", "tar -xzf"},
+	} {
+		if strings.Index(download.Run, ordered[0]) >= strings.Index(download.Run, ordered[1]) {
+			t.Errorf("%q must occur before %q", ordered[0], ordered[1])
 		}
 	}
 }

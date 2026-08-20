@@ -42,6 +42,10 @@ for helper in "$compat_probe" "$update_verifier"; do
 	"$readelf_tool" -h "$dist/$helper" | grep -F 'Class:' | grep -Fq 'ELF64'
 	"$readelf_tool" -h "$dist/$helper" | grep -F 'Machine:' | grep -Fq 'X86-64'
 	"$readelf_tool" -h "$dist/$helper" | grep -F 'Type:' | grep -Fq 'EXEC'
+	if "$readelf_tool" -l "$dist/$helper" | grep -q 'INTERP'; then
+		echo "PT_INTERP helper rejected: $helper" >&2
+		exit 1
+	fi
 	if "$objdump_tool" -p "$dist/$helper" | grep -q 'NEEDED'; then
 		echo "dynamically linked helper rejected: $helper" >&2
 		exit 1

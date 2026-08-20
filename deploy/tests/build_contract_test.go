@@ -25,10 +25,10 @@ func TestReleaseBuildContractIsCentralizedAndPinned(t *testing.T) {
 		"GOEXPERIMENT=cgocheck2",
 		"-buildmode=c-shared",
 		"PluginVersion=$(VERSION)",
-		"scripts/archive-source.sh",
+		"scripts/release-container.sh",
 		"scripts/finalize-release.sh",
-		"tar -xf - -C",
-		`--file "$$temporary/build/release.Dockerfile"`,
+		"! readelf -l '$(COMPAT_PROBE_OUT)' | grep -q 'INTERP'",
+		"! readelf -l '$(UPDATE_VERIFIER_OUT)' | grep -q 'INTERP'",
 	} {
 		if !strings.Contains(makefile, want) {
 			t.Errorf("Makefile missing %q", want)
@@ -55,9 +55,18 @@ func TestReleaseBuildContractIsCentralizedAndPinned(t *testing.T) {
 		if strings.Contains(workflow, "go build ") || strings.Contains(workflow, "CGO_ENABLED=") {
 			t.Errorf("%s duplicates release build parameters", workflowPath)
 		}
+		if strings.Contains(workflow, "make release-container") {
+			t.Errorf("%s executes release driver from the working tree", workflowPath)
+		}
+		if !strings.Contains(workflow, `git -c core.autocrlf=false show "HEAD:scripts/release-container.sh"`) {
+			t.Errorf("%s does not load the release driver from the committed source", workflowPath)
+		}
 	}
 	if strings.Contains(makefile, "--file '$(RELEASE_DOCKERFILE)'") {
 		t.Fatal("release container must use Dockerfile extracted from the committed source archive")
+	}
+	if strings.HasPrefix(strings.TrimSpace(dockerfile), "# syntax=docker/dockerfile:1") {
+		t.Fatal("release Dockerfile must not use a mutable frontend syntax tag")
 	}
 }
 
@@ -116,8 +125,94 @@ func TestReleaseSourceArchiveUsesCommittedFilesOnly(t *testing.T) {
 	}
 }
 
+func TestCommittedReleaseDriverIgnoresDirtyWorkingCopy(t *testing.T) {
+	requireTool(t, "git")
+	requireTool(t, "sh")
+
+	repository := t.TempDir()
+	runTestCommand(t, repository, "git", "init", "-q")
+	runTestCommand(t, repository, "git", "config", "user.email", "release-test@example.invalid")
+	runTestCommand(t, repository, "git", "config", "user.name", "Release Test")
+	driverPath := filepath.Join(repository, "scripts", "release-container.sh")
+	writeTestFile(t, driverPath, "#!/bin/sh\nprintf 'committed\\n'\n")
+	runTestCommand(t, repository, "git", "add", "scripts/release-container.sh")
+	runTestCommand(t, repository, "git", "commit", "-q", "-m", "fixture")
+	writeTestFile(t, driverPath, "#!/bin/sh\nprintf 'dirty\\n'\n")
+
+	committed := runTestCommand(t, repository, "git", "-c", "core.autocrlf=false", "show", "HEAD:scripts/release-container.sh")
+	command := exec.Command("sh", "-s")
+	command.Stdin = bytes.NewReader(committed)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("execute committed release driver: %v\n%s", err, output)
+	}
+	if string(output) != "committed\n" {
+		t.Fatalf("release driver output = %q, want committed source", output)
+	}
+
+	info, err := os.Stat(filepath.Join(repositoryRoot(t), "scripts", "release-container.sh"))
+	if err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("repository committed release driver is missing: %v", err)
+	}
+}
+
+func TestReleaseIdentityVerifierRequiresSamePeeledCommit(t *testing.T) {
+	requireTool(t, "git")
+	requireTool(t, "sh")
+
+	repository := t.TempDir()
+	runTestCommand(t, repository, "git", "init", "-q")
+	runTestCommand(t, repository, "git", "config", "user.email", "release-test@example.invalid")
+	runTestCommand(t, repository, "git", "config", "user.name", "Release Test")
+	writeTestFile(t, filepath.Join(repository, "source.txt"), "first\n")
+	runTestCommand(t, repository, "git", "add", "source.txt")
+	runTestCommand(t, repository, "git", "commit", "-q", "-m", "first")
+	first := strings.TrimSpace(string(runTestCommand(t, repository, "git", "rev-parse", "HEAD")))
+	runTestCommand(t, repository, "git", "tag", "-a", "v1.0.1", "-m", "release")
+
+	writeTestFile(t, filepath.Join(repository, "source.txt"), "second\n")
+	runTestCommand(t, repository, "git", "commit", "-qam", "second")
+	second := strings.TrimSpace(string(runTestCommand(t, repository, "git", "rev-parse", "HEAD")))
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runTestCommand(t, repository, "git", "clone", "-q", "--bare", repository, remote)
+
+	metadata := filepath.Join(t.TempDir(), "release-metadata.json")
+	writeMetadata := func(commit string) {
+		t.Helper()
+		writeTestFile(t, metadata, `{"source_commit":"`+commit+`"}`+"\n")
+	}
+	writeMetadata(first)
+	script := filepath.Join(repositoryRoot(t), "scripts", "verify-release-identity.sh")
+	command := exec.Command("sh", script, first, first, metadata, remote, "v1.0.1")
+	command.Dir = repository
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("matching release identity rejected: %v\n%s", err, output)
+	}
+
+	for _, tt := range []struct {
+		name     string
+		event    string
+		build    string
+		metadata string
+	}{
+		{name: "event mismatch", event: second, build: first, metadata: first},
+		{name: "build mismatch", event: first, build: second, metadata: first},
+		{name: "metadata mismatch", event: first, build: first, metadata: second},
+		{name: "remote tag mismatch", event: second, build: second, metadata: second},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			writeMetadata(tt.metadata)
+			command := exec.Command("sh", script, tt.event, tt.build, metadata, remote, "v1.0.1")
+			command.Dir = repository
+			if output, err := command.CombinedOutput(); err == nil || !strings.Contains(string(output), "release commit identity mismatch") {
+				t.Fatalf("mismatch result: err=%v output=%s", err, output)
+			}
+		})
+	}
+}
+
 func TestReleaseFinalizerEmitsPortableMetadataAndChecksums(t *testing.T) {
-	dist, env := releaseFinalizerFixture(t, "2.32", false)
+	dist, env := releaseFinalizerFixture(t, "2.32", false, false)
 	runReleaseFinalizer(t, dist, env, true)
 
 	wantFiles := []string{
@@ -172,13 +267,15 @@ func TestReleaseFinalizerRejectsNewerGLIBCAndDynamicHelpers(t *testing.T) {
 		name          string
 		glibc         string
 		dynamicHelper bool
+		interpHelper  bool
 		want          string
 	}{
 		{name: "GLIBC 2.34", glibc: "2.34", want: "GLIBC ceiling 2.32"},
 		{name: "dynamic helper", glibc: "2.32", dynamicHelper: true, want: "dynamically linked helper"},
+		{name: "PT_INTERP helper", glibc: "2.32", interpHelper: true, want: "PT_INTERP"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			dist, env := releaseFinalizerFixture(t, tt.glibc, tt.dynamicHelper)
+			dist, env := releaseFinalizerFixture(t, tt.glibc, tt.dynamicHelper, tt.interpHelper)
 			output := runReleaseFinalizer(t, dist, env, false)
 			if !strings.Contains(string(output), tt.want) {
 				t.Fatalf("failure output = %s, want %q", output, tt.want)
@@ -209,7 +306,7 @@ func TestReleaseWorkflowPinsVersionHostAndLinuxAMD64(t *testing.T) {
 	for _, want := range []string{
 		`tags:`,
 		`- "v1.0.1"`,
-		"v7.2.136",
+		"v7.2.137",
 		"linux-amd64",
 	} {
 		if !strings.Contains(workflow, want) {
@@ -249,7 +346,7 @@ func runTestCommand(t *testing.T, directory, name string, args ...string) []byte
 	return output
 }
 
-func releaseFinalizerFixture(t *testing.T, glibc string, dynamicHelper bool) (string, []string) {
+func releaseFinalizerFixture(t *testing.T, glibc string, dynamicHelper, interpHelper bool) (string, []string) {
 	t.Helper()
 	requireTool(t, "sh")
 	requireTool(t, "sha256sum")
@@ -266,10 +363,19 @@ func releaseFinalizerFixture(t *testing.T, glibc string, dynamicHelper bool) (st
 	tools := t.TempDir()
 	readelf := filepath.Join(tools, "readelf")
 	objdump := filepath.Join(tools, "objdump")
+	interp := ""
+	if interpHelper {
+		interp = "printf '  INTERP         0x0000000000000000\\n'"
+	}
 	writeTestFile(t, readelf, `#!/bin/sh
-case "$2" in
-  *.so) printf '  Class: ELF64\n  Machine: Advanced Micro Devices X86-64\n  Type: DYN (Shared object file)\n' ;;
-  *) printf '  Class: ELF64\n  Machine: Advanced Micro Devices X86-64\n  Type: EXEC (Executable file)\n' ;;
+case "$1" in
+  -h)
+    case "$2" in
+      *.so) printf '  Class: ELF64\n  Machine: Advanced Micro Devices X86-64\n  Type: DYN (Shared object file)\n' ;;
+      *) printf '  Class: ELF64\n  Machine: Advanced Micro Devices X86-64\n  Type: EXEC (Executable file)\n' ;;
+    esac
+    ;;
+  -l) `+interp+` ;;
 esac
 `)
 	needed := ""

@@ -12,7 +12,9 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     outputs:
+      event_commit: ${{ steps.release_identity.outputs.event_commit }}
       manifest_sha256: ${{ steps.release_manifest.outputs.sha256 }}
+      source_commit: ${{ steps.release_identity.outputs.source_commit }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -22,6 +24,16 @@ jobs:
           go-version: "1.26.5"
           cache: true
           cache-dependency-path: go.sum
+
+      - name: Bind event and build commits
+        id: release_identity
+        run: |
+          set -euo pipefail
+          event_commit=$(git rev-parse --verify "${GITHUB_SHA}^{commit}")
+          source_commit=$(git rev-parse --verify "HEAD^{commit}")
+          test "$event_commit" = "$source_commit"
+          echo "event_commit=$event_commit" >> "$GITHUB_OUTPUT"
+          echo "source_commit=$source_commit" >> "$GITHUB_OUTPUT"
 
       - name: Validate source and dependency notices
         run: |
@@ -35,13 +47,15 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF_NAME" = "v$(make print-version)"
-          make release-container DIST_DIR=dist
+          driver="$RUNNER_TEMP/release-container.sh"
+          git -c core.autocrlf=false show "HEAD:scripts/release-container.sh" > "$driver"
+          sh "$driver" . HEAD dist
 
       - name: Validate release metadata and checksums
         id: release_manifest
         run: |
           set -euo pipefail
-          source_commit=$(git rev-parse --verify HEAD)
+          source_commit="${{ steps.release_identity.outputs.source_commit }}"
           version=$(make print-version)
           jq -e \
             --arg version "$version" \
@@ -117,9 +131,9 @@ jobs:
       - name: Resolve fixed real official compatibility matrix
         run: |
           set -euo pipefail
-          printf '%s\n' v7.2.133 v7.2.136 > "$RUNNER_TEMP/candidates.txt"
+          printf '%s\n' v7.2.133 v7.2.137 > "$RUNNER_TEMP/candidates.txt"
 
-      - name: Download official candidates without executing them
+      - name: Download and verify official candidates without executing them
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -130,19 +144,51 @@ jobs:
             case "$candidate_version" in
               ''|*[!0-9A-Za-z.+-]*) echo "official candidate has an invalid version" >&2; exit 1 ;;
             esac
-            release_json=$(curl --fail --silent --show-error --location \
+            release_json_file="$RUNNER_TEMP/release-$index.json"
+            curl --fail --silent --show-error --location \
               -H "Accept: application/vnd.github+json" \
               -H "Authorization: Bearer ${GH_TOKEN}" \
-              "https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/tags/${tag}")
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "${GITHUB_API_URL}/repos/router-for-me/CLIProxyAPI/releases/tags/${tag}" \
+              -o "$release_json_file"
             asset="CLIProxyAPI_${candidate_version}_linux_amd64.tar.gz"
             case "$asset" in *_no-plugin*) echo "refusing no-plugin host asset" >&2; exit 1 ;; esac
-            asset_url=$(printf '%s' "$release_json" | jq -er --arg asset "$asset" '.assets[] | select(.name == $asset) | .browser_download_url')
-            case "$asset_url" in *_no-plugin*) echo "refusing no-plugin host asset" >&2; exit 1 ;; esac
+            asset_json=$(jq -ce --arg asset "$asset" \
+              '[.assets[] | select(.name == $asset)] | if length == 1 then .[0] else error("candidate asset identity is ambiguous") end' \
+              "$release_json_file")
+            checksums_json=$(jq -ce \
+              '[.assets[] | select(.name == "checksums.txt")] | if length == 1 then .[0] else error("checksums asset identity is ambiguous") end' \
+              "$release_json_file")
+            asset_id=$(printf '%s' "$asset_json" | jq -er '.id')
+            asset_size=$(printf '%s' "$asset_json" | jq -er '.size')
+            checksums_id=$(printf '%s' "$checksums_json" | jq -er '.id')
+            checksums_size=$(printf '%s' "$checksums_json" | jq -er '.size')
+            for value in "$asset_id" "$asset_size" "$checksums_id" "$checksums_size"; do
+              case "$value" in ''|*[!0-9]*) echo "official asset identity is invalid" >&2; exit 1 ;; esac
+              test "$value" -gt 0
+            done
             candidate_dir="$RUNNER_TEMP/official-candidates/$index"
             mkdir -p "$candidate_dir"
             curl --fail --silent --show-error --location --retry 3 \
+              -H "Accept: application/octet-stream" \
               -H "Authorization: Bearer ${GH_TOKEN}" \
-              "$asset_url" -o "$candidate_dir/candidate.tar.gz"
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "${GITHUB_API_URL}/repos/router-for-me/CLIProxyAPI/releases/assets/${asset_id}" \
+              -o "$candidate_dir/candidate.tar.gz"
+            curl --fail --silent --show-error --location --retry 3 \
+              -H "Accept: application/octet-stream" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "${GITHUB_API_URL}/repos/router-for-me/CLIProxyAPI/releases/assets/${checksums_id}" \
+              -o "$candidate_dir/checksums.txt"
+            test "$(stat -c '%s' "$candidate_dir/candidate.tar.gz")" -eq "$asset_size"
+            test "$(stat -c '%s' "$candidate_dir/checksums.txt")" -eq "$checksums_size"
+            official_sha256=$(awk -v asset="$asset" '
+              $2 == asset && length($1) == 64 && $1 !~ /[^0-9A-Fa-f]/ { count++; hash=tolower($1) }
+              END { if (count != 1) exit 1; print hash }
+            ' "$candidate_dir/checksums.txt")
+            observed_sha256=$(sha256sum "$candidate_dir/candidate.tar.gz" | awk '{print $1}')
+            test "$observed_sha256" = "$official_sha256"
             tar -xzf "$candidate_dir/candidate.tar.gz" -C "$candidate_dir"
             candidate=$(find "$candidate_dir" -maxdepth 2 -type f \( -name 'cli-proxy-api' -o -name 'CLIProxyAPI' \) -print -quit)
             test -n "$candidate"
@@ -150,7 +196,7 @@ jobs:
             index=$((index + 1))
           done < "$RUNNER_TEMP/candidates.txt"
 
-      - name: Prove real host dispatch on baseline and fixed v7.2.136
+      - name: Prove real host dispatch on baseline and fixed v7.2.137
         run: |
           set -euo pipefail
           version=$(make print-version)
@@ -189,18 +235,35 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       actions: read
+      attestations: write
       contents: write
+      id-token: write
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Download compatibility-tested release artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-dist-${{ github.run_id }}-${{ github.run_attempt }}
           path: dist
 
-      - name: Publish immutable stable release
+      - name: Bind event, build, metadata, and remote tag commits
+        env:
+          BUILD_COMMIT: ${{ needs.build.outputs.source_commit }}
+          EVENT_COMMIT: ${{ needs.build.outputs.event_commit }}
+        run: |
+          set -euo pipefail
+          scripts/verify-release-identity.sh \
+            "$EVENT_COMMIT" \
+            "$BUILD_COMMIT" \
+            dist/release-metadata.json \
+            "https://github.com/${GITHUB_REPOSITORY}.git" \
+            "$GITHUB_REF_NAME"
+
+      - name: Validate publication artifact
         env:
           EXPECTED_MANIFEST_SHA256: ${{ needs.build.outputs.manifest_sha256 }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
@@ -220,17 +283,22 @@ jobs:
              (.source_commit | test("^[0-9a-f]{40}$")) and
              ([.glibc_max, "2.32"] | sort_by(split(".") | map(tonumber)) | last == "2.32")' \
             dist/release-metadata.json >/dev/null
+
+      - name: Attest exact release artifacts
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: dist/*
+
+      - name: Publish immutable stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "release already exists; refusing mutation" >&2
             exit 1
           fi
-          gh release create "$GITHUB_REF_NAME" \
-            dist/token-saver-v1.0.1-linux-amd64.so \
-            dist/compat-probe-v1.0.1-linux-amd64 \
-            dist/update-verifier-v1.0.1-linux-amd64 \
-            dist/GLIBC_REQUIREMENTS.txt \
-            dist/release-metadata.json \
-            dist/SHA256SUMS \
+          gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "Token Saver v1.0.1" \

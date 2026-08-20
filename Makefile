@@ -71,6 +71,8 @@ verify-release:
 	readelf -h '$(PLUGIN_OUT)' | grep -F 'Type:' | grep -F 'DYN'
 	readelf -h '$(COMPAT_PROBE_OUT)' | grep -F 'Type:' | grep -F 'EXEC'
 	readelf -h '$(UPDATE_VERIFIER_OUT)' | grep -F 'Type:' | grep -F 'EXEC'
+	! readelf -l '$(COMPAT_PROBE_OUT)' | grep -q 'INTERP'
+	! readelf -l '$(UPDATE_VERIFIER_OUT)' | grep -q 'INTERP'
 	! objdump -p '$(COMPAT_PROBE_OUT)' | grep -q 'NEEDED'
 	! objdump -p '$(UPDATE_VERIFIER_OUT)' | grep -q 'NEEDED'
 	max_glibc="$$(objdump -T '$(PLUGIN_OUT)' | sed -n 's/.*GLIBC_\([0-9.]*\).*/\1/p' | sort -V | tail -n 1)"; \
@@ -78,11 +80,7 @@ verify-release:
 		test "$$(printf '%s\n' "$$max_glibc" 2.32 | sort -V | tail -n 1)" = 2.32
 
 release-container:
-	test ! -e '$(DIST_DIR)'
 	temporary="$$(mktemp -d)"; \
 		trap 'rm -rf "$$temporary"' EXIT HUP INT TERM; \
-		source_commit="$$(git rev-parse --verify '$(SOURCE_REF)^{commit}')"; \
-		scripts/archive-source.sh . '$(SOURCE_REF)' | tar -xf - -C "$$temporary"; \
-		$(DOCKER) build --build-arg "SOURCE_COMMIT=$$source_commit" \
-			--file "$$temporary/build/release.Dockerfile" \
-			--output 'type=local,dest=$(DIST_DIR)' "$$temporary"
+		git -c core.autocrlf=false show '$(SOURCE_REF):scripts/release-container.sh' >"$$temporary/release-container.sh"; \
+		DOCKER='$(DOCKER)' sh "$$temporary/release-container.sh" . '$(SOURCE_REF)' '$(DIST_DIR)'

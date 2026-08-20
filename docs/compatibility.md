@@ -24,7 +24,7 @@ Every plugin release must run the real `compat-probe` against both hosts below w
 | Host | Required evidence |
 |---|---|
 | CLIProxyAPI `v7.2.133` | Candidate starts on a temporary loopback port, loads ABI 1/RPC 3, applies config, dispatches a mock-provider request, and emits exactly one Caveman marker. |
-| Exact approved latest stable | The same real dispatch plus config GET/PATCH/status and self-test. At the time this document was prepared, the upstream latest was `v7.2.134`; release automation must resolve and pin the current exact tag rather than trust this sentence. |
+| Exact approved latest stable | The same real dispatch plus config GET/PATCH/status and self-test. The fixed U2 candidate is `v7.2.137`, published on August 19, 2026; later promotion automation must resolve and pin its own reviewed exact tag. |
 
 The Management API does not expose normalizer capabilities or their complete ordering. Production therefore also requires a manual config audit proving Token Saver has `priority: -100` and no enabled normalizer has a lower numeric priority. A plugin self-test alone is not host-dispatch evidence.
 
