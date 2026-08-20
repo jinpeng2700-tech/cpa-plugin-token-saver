@@ -37,12 +37,26 @@ jobs:
           test "$GITHUB_REF_NAME" = "v$(make print-version)"
           make release-container DIST_DIR=dist
 
-      - name: Create transport checksums
+      - name: Validate release metadata and checksums
         id: release_manifest
         run: |
           set -euo pipefail
-          (cd dist && sha256sum ./* | sort -k2 > SHA256SUMS)
-          test "$(wc -l < dist/SHA256SUMS)" -eq 3
+          source_commit=$(git rev-parse --verify HEAD)
+          version=$(make print-version)
+          jq -e \
+            --arg version "$version" \
+            --arg tag "$GITHUB_REF_NAME" \
+            --arg source_commit "$source_commit" \
+            '.version == $version and
+             .tag == $tag and
+             .source_commit == $source_commit and
+             .platform == "linux-amd64" and
+             .abi == 1 and
+             .rpc == 3' \
+            dist/release-metadata.json >/dev/null
+          (cd dist && sha256sum -c SHA256SUMS)
+          test "$(wc -l < dist/SHA256SUMS)" -eq 5
+          test "$(find dist -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 6
           manifest_sha256=$(sha256sum dist/SHA256SUMS | awk '{print $1}')
           echo "sha256=$manifest_sha256" >> "$GITHUB_OUTPUT"
 
@@ -50,7 +64,13 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-dist-${{ github.run_id }}-${{ github.run_attempt }}
-          path: dist/
+          path: |
+            dist/token-saver-v1.0.1-linux-amd64.so
+            dist/compat-probe-v1.0.1-linux-amd64
+            dist/update-verifier-v1.0.1-linux-amd64
+            dist/GLIBC_REQUIREMENTS.txt
+            dist/release-metadata.json
+            dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 1
           overwrite: false
@@ -161,3 +181,57 @@ jobs:
               go test -count=1 -run 'TestRealCandidate(Dispatch|CoreOnlyDispatch)$' ./test/compat
             index=$((index + 1))
           done < "$RUNNER_TEMP/candidates.txt"
+
+  publish:
+    needs:
+      - build
+      - compatibility
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download compatibility-tested release artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-dist-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist
+
+      - name: Publish immutable stable release
+        env:
+          EXPECTED_MANIFEST_SHA256: ${{ needs.build.outputs.manifest_sha256 }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          test "$GITHUB_REF_NAME" = "v1.0.1"
+          test "$(find dist -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 6
+          observed_manifest_sha256=$(sha256sum dist/SHA256SUMS | awk '{print $1}')
+          test "$observed_manifest_sha256" = "$EXPECTED_MANIFEST_SHA256"
+          (cd dist && sha256sum -c SHA256SUMS)
+          jq -e \
+            --arg version "$version" \
+            --arg tag "$GITHUB_REF_NAME" \
+            '.version == $version and
+             .tag == $tag and
+             .platform == "linux-amd64" and
+             .abi == 1 and
+             .rpc == 3 and
+             (.source_commit | test("^[0-9a-f]{40}$")) and
+             ([.glibc_max, "2.32"] | sort_by(split(".") | map(tonumber)) | last == "2.32")' \
+            dist/release-metadata.json >/dev/null
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release already exists; refusing mutation" >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            dist/token-saver-v1.0.1-linux-amd64.so \
+            dist/compat-probe-v1.0.1-linux-amd64 \
+            dist/update-verifier-v1.0.1-linux-amd64 \
+            dist/GLIBC_REQUIREMENTS.txt \
+            dist/release-metadata.json \
+            dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "Token Saver v1.0.1" \
+            --notes "Linux amd64 plugin release. ABI 1, RPC 3. See release-metadata.json and GLIBC_REQUIREMENTS.txt."

@@ -2,6 +2,21 @@
 
 > **Production blocker:** the verified VPS runs systemd 239. Token Saver rollout and the CLI update wrapper must not be enabled there. `LoadCredential=` was added in systemd 247; the wrapper rejects every version below 247 and there is no environment-variable, command-line, script, or child-process fallback for the management credential.
 
+## Token Saver release contract
+
+Stable plugin release `v1.0.1` is built from the tagged commit archive, never from the working tree. The pinned release container combines Go `1.26.5` with Debian Bullseye glibc `2.31`; release validation rejects a plugin whose highest required GLIBC symbol exceeds `2.32` and rejects either helper when its ELF dynamic section contains `NEEDED`.
+
+The immutable Linux amd64 release contains exactly:
+
+- `token-saver-v1.0.1-linux-amd64.so`
+- `compat-probe-v1.0.1-linux-amd64`
+- `update-verifier-v1.0.1-linux-amd64`
+- `GLIBC_REQUIREMENTS.txt`
+- `release-metadata.json`
+- `SHA256SUMS`
+
+`release-metadata.json` binds version `1.0.1`, tag `v1.0.1`, full source commit, platform `linux-amd64`, ABI `1`, RPC `3`, and observed maximum GLIBC requirement. `SHA256SUMS` covers every release file except itself. The release workflow grants write permission only to the final job after the read-only compatibility job passes.
+
 ## Host matrix
 
 Every plugin release must run the real `compat-probe` against both hosts below with the plugin-capable Linux asset (`CLIProxyAPI_<version>_linux_<arch>.tar.gz`, never `_no-plugin`):

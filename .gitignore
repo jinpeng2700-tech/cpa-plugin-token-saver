@@ -1,1 +1,9 @@
 .worktrees/
+/dist/
+/compat-probe
+/update-verifier
+/token-saver.so
+/token-saver.h
+/source.tar.gz
+**/__pycache__/
+*.py[cod]

@@ -6,5 +6,7 @@
 !main_nocgo.go
 !internal/
 !internal/**
+!scripts/
+!scripts/finalize-release.sh
 !tools/
 !tools/**
