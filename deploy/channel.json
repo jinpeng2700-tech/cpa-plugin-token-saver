@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "channel": "stable",
+  "channel_generation": 0,
+  "fingerprint": null,
+  "approved_tag": null,
+  "manifest_asset": "approved-release.json"
+}

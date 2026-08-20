@@ -1,0 +1,262 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jinpeng2700-tech/cpa-plugin-token-saver/deploy/approved-release.schema.json",
+  "title": "CLIProxyAPI approved release",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "verifier_schema",
+    "channel",
+    "channel_generation",
+    "prior_fingerprint",
+    "fingerprint",
+    "official",
+    "plugin",
+    "compatibility",
+    "approved_attestation"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "verifier_schema": {
+      "const": 1
+    },
+    "channel": {
+      "const": "stable"
+    },
+    "channel_generation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "prior_fingerprint": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/fingerprint"
+        }
+      ]
+    },
+    "fingerprint": {
+      "$ref": "#/$defs/fingerprint"
+    },
+    "official": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "release_id",
+        "tag",
+        "version",
+        "asset",
+        "checksums",
+        "binary_sha256",
+        "provenance"
+      ],
+      "properties": {
+        "repository": {
+          "const": "router-for-me/CLIProxyAPI"
+        },
+        "release_id": {
+          "$ref": "#/$defs/positiveUint64"
+        },
+        "tag": {
+          "$ref": "#/$defs/tag"
+        },
+        "version": {
+          "$ref": "#/$defs/version"
+        },
+        "asset": {
+          "$ref": "#/$defs/asset"
+        },
+        "checksums": {
+          "$ref": "#/$defs/asset"
+        },
+        "binary_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "provenance": {
+          "const": "official-checksum-only"
+        }
+      }
+    },
+    "plugin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "release_id",
+        "tag",
+        "version",
+        "source_commit",
+        "asset",
+        "probe_asset",
+        "attestation"
+      ],
+      "properties": {
+        "repository": {
+          "const": "jinpeng2700-tech/cpa-plugin-token-saver"
+        },
+        "release_id": {
+          "$ref": "#/$defs/positiveUint64"
+        },
+        "tag": {
+          "$ref": "#/$defs/tag"
+        },
+        "version": {
+          "$ref": "#/$defs/version"
+        },
+        "source_commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "asset": {
+          "$ref": "#/$defs/asset"
+        },
+        "probe_asset": {
+          "$ref": "#/$defs/asset"
+        },
+        "attestation": {
+          "$ref": "#/$defs/attestation"
+        }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "plugin",
+        "core_only",
+        "config_generation",
+        "config_digest",
+        "scenarios"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "plugin": {
+          "const": true
+        },
+        "core_only": {
+          "const": true
+        },
+        "config_generation": {
+          "$ref": "#/$defs/positiveUint64"
+        },
+        "config_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "scenarios": {
+          "const": [
+            "all-off",
+            "rtk",
+            "headroom-rewrite",
+            "headroom-timeout",
+            "caveman",
+            "ponytail",
+            "fixed-order"
+          ]
+        }
+      }
+    },
+    "approved_attestation": {
+      "$ref": "#/$defs/attestation"
+    }
+  },
+  "$defs": {
+    "positiveUint64": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "fingerprint": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+      "maxLength": 64
+    },
+    "tag": {
+      "type": "string",
+      "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+      "maxLength": 65
+    },
+    "artifactName": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$"
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "id",
+        "size",
+        "sha256"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/artifactName"
+        },
+        "id": {
+          "$ref": "#/$defs/positiveUint64"
+        },
+        "size": {
+          "$ref": "#/$defs/positiveUint64"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "attestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "workflow",
+        "ref",
+        "source_commit",
+        "issuer"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+          "maxLength": 200
+        },
+        "workflow": {
+          "type": "string",
+          "pattern": "^\\.github/workflows/[A-Za-z0-9._-]+\\.yml$",
+          "maxLength": 200
+        },
+        "ref": {
+          "type": "string",
+          "pattern": "^refs/(heads|tags)/[A-Za-z0-9._/-]+$",
+          "maxLength": 300
+        },
+        "source_commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "issuer": {
+          "const": "https://token.actions.githubusercontent.com"
+        }
+      }
+    }
+  }
+}

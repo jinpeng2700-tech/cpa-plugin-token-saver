@@ -1,14 +1,25 @@
 package deploytests
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
 
 type releaseWorkflow struct {
+	On          map[string]any        `yaml:"on"`
+	Concurrency map[string]any        `yaml:"concurrency"`
 	Permissions map[string]string     `yaml:"permissions"`
 	Jobs        map[string]releaseJob `yaml:"jobs"`
 }
@@ -29,11 +40,750 @@ type releaseStep struct {
 	With map[string]any `yaml:"with"`
 }
 
+type promotionAsset struct {
+	ID     uint64 `json:"id"`
+	Name   string `json:"name"`
+	Size   uint64 `json:"size"`
+	Digest string `json:"digest"`
+}
+
+type promotionRelease struct {
+	ID         uint64           `json:"id"`
+	TagName    string           `json:"tag_name"`
+	Draft      bool             `json:"draft"`
+	Prerelease bool             `json:"prerelease"`
+	Assets     []promotionAsset `json:"assets"`
+}
+
+type selectedRelease struct {
+	ReleaseID uint64                    `json:"release_id"`
+	Tag       string                    `json:"tag"`
+	Version   string                    `json:"version"`
+	Assets    map[string]promotionAsset `json:"assets"`
+}
+
+type promotionSelection struct {
+	Official selectedRelease `json:"official"`
+	Plugin   selectedRelease `json:"plugin"`
+}
+
+type promotionPaths struct {
+	OfficialArchive    string
+	OfficialChecksums  string
+	OfficialBinary     string
+	Plugin             string
+	Probe              string
+	PluginMetadata     string
+	PluginChecksums    string
+	PluginSourceCommit string
+}
+
+type promotionLocked struct {
+	Selection               promotionSelection `json:"selection"`
+	OfficialArchiveSHA256   string             `json:"official_archive_sha256"`
+	OfficialChecksumsSHA256 string             `json:"official_checksums_sha256"`
+	OfficialBinarySHA256    string             `json:"official_binary_sha256"`
+	PluginSHA256            string             `json:"plugin_sha256"`
+	ProbeSHA256             string             `json:"probe_sha256"`
+	PluginSourceCommit      string             `json:"plugin_source_commit"`
+}
+
+type promotionProbeReport struct {
+	SchemaVersion    uint32   `json:"schema_version"`
+	Compatible       bool     `json:"compatible"`
+	Code             string   `json:"code"`
+	PluginID         string   `json:"plugin_id,omitempty"`
+	PluginVersion    string   `json:"plugin_version,omitempty"`
+	MarkerCount      int      `json:"marker_count"`
+	ConfigGeneration uint64   `json:"config_generation"`
+	ConfigDigest     string   `json:"config_digest"`
+	Scenarios        []string `json:"scenarios"`
+	FailedScenario   string   `json:"failed_scenario,omitempty"`
+}
+
+type promotionResult struct {
+	Manifest approvedManifest
+	Channel  map[string]any
+	Tag      string
+	Publish  bool
+}
+
+type approvedManifest struct {
+	SchemaVersion       uint32                `json:"schema_version"`
+	VerifierSchema      uint32                `json:"verifier_schema"`
+	Channel             string                `json:"channel"`
+	ChannelGeneration   uint64                `json:"channel_generation"`
+	PriorFingerprint    *string               `json:"prior_fingerprint"`
+	Fingerprint         string                `json:"fingerprint"`
+	Official            approvedOfficial      `json:"official"`
+	Plugin              approvedPlugin        `json:"plugin"`
+	Compatibility       approvedCompatibility `json:"compatibility"`
+	ApprovedAttestation approvedAttestation   `json:"approved_attestation"`
+}
+
+type approvedAsset struct {
+	Name   string `json:"name"`
+	ID     uint64 `json:"id"`
+	Size   uint64 `json:"size"`
+	SHA256 string `json:"sha256"`
+}
+
+type approvedOfficial struct {
+	Repository   string        `json:"repository"`
+	ReleaseID    uint64        `json:"release_id"`
+	Tag          string        `json:"tag"`
+	Version      string        `json:"version"`
+	Asset        approvedAsset `json:"asset"`
+	Checksums    approvedAsset `json:"checksums"`
+	BinarySHA256 string        `json:"binary_sha256"`
+	Provenance   string        `json:"provenance"`
+}
+
+type approvedPlugin struct {
+	Repository   string              `json:"repository"`
+	ReleaseID    uint64              `json:"release_id"`
+	Tag          string              `json:"tag"`
+	Version      string              `json:"version"`
+	SourceCommit string              `json:"source_commit"`
+	Asset        approvedAsset       `json:"asset"`
+	ProbeAsset   approvedAsset       `json:"probe_asset"`
+	Attestation  approvedAttestation `json:"attestation"`
+}
+
+type approvedCompatibility struct {
+	SchemaVersion    uint32   `json:"schema_version"`
+	Plugin           bool     `json:"plugin"`
+	CoreOnly         bool     `json:"core_only"`
+	ConfigGeneration uint64   `json:"config_generation"`
+	ConfigDigest     string   `json:"config_digest"`
+	Scenarios        []string `json:"scenarios"`
+}
+
+type approvedAttestation struct {
+	Repository   string `json:"repository"`
+	Workflow     string `json:"workflow"`
+	Ref          string `json:"ref"`
+	SourceCommit string `json:"source_commit"`
+	Issuer       string `json:"issuer"`
+}
+
+type promotionVersion [3]uint64
+
+var promotionSemVerPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+var promotionDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+func selectPromotionCandidates(officialRaw, pluginRaw []byte, previous *approvedManifest) (promotionSelection, error) {
+	officialReleases, err := decodePromotionReleases(officialRaw)
+	if err != nil {
+		return promotionSelection{}, fmt.Errorf("official releases: %w", err)
+	}
+	pluginReleases, err := decodePromotionReleases(pluginRaw)
+	if err != nil {
+		return promotionSelection{}, fmt.Errorf("plugin releases: %w", err)
+	}
+	official, officialVersion, err := selectPromotionRelease(officialReleases, officialAssetSet)
+	if err != nil {
+		return promotionSelection{}, fmt.Errorf("official candidate: %w", err)
+	}
+	plugin, pluginVersion, err := selectPromotionRelease(pluginReleases, pluginAssetSet)
+	if err != nil {
+		return promotionSelection{}, fmt.Errorf("plugin candidate: %w", err)
+	}
+	if previous != nil {
+		previousOfficial, okOfficial := parsePromotionVersion("v" + previous.Official.Version)
+		previousPlugin, okPlugin := parsePromotionVersion("v" + previous.Plugin.Version)
+		if !okOfficial || !okPlugin {
+			return promotionSelection{}, fmt.Errorf("previous approved versions are invalid")
+		}
+		if comparePromotionVersion(officialVersion, previousOfficial) < 0 ||
+			comparePromotionVersion(pluginVersion, previousPlugin) < 0 {
+			return promotionSelection{}, fmt.Errorf("candidate downgrade")
+		}
+	}
+	return promotionSelection{Official: official, Plugin: plugin}, nil
+}
+
+func validateApprovedManifest(raw []byte) (approvedManifest, error) {
+	if err := rejectDuplicateJSONKeys(raw); err != nil {
+		return approvedManifest{}, err
+	}
+	var manifest approvedManifest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&manifest); err != nil {
+		return approvedManifest{}, err
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return approvedManifest{}, err
+	}
+	if err := validateApprovedManifestFields(manifest); err != nil {
+		return approvedManifest{}, err
+	}
+	return manifest, nil
+}
+
+func lockPromotionArtifacts(selection promotionSelection, paths promotionPaths) (promotionLocked, error) {
+	officialArchive, err := verifyPromotionFile(paths.OfficialArchive, selection.Official.Assets["archive"])
+	if err != nil {
+		return promotionLocked{}, err
+	}
+	officialChecksums, err := verifyPromotionFile(paths.OfficialChecksums, selection.Official.Assets["checksums"])
+	if err != nil {
+		return promotionLocked{}, err
+	}
+	pluginHash, err := verifyPromotionFile(paths.Plugin, selection.Plugin.Assets["plugin"])
+	if err != nil {
+		return promotionLocked{}, err
+	}
+	probeHash, err := verifyPromotionFile(paths.Probe, selection.Plugin.Assets["probe"])
+	if err != nil {
+		return promotionLocked{}, err
+	}
+	if _, err := verifyPromotionFile(paths.PluginMetadata, selection.Plugin.Assets["metadata"]); err != nil {
+		return promotionLocked{}, err
+	}
+	if _, err := verifyPromotionFile(paths.PluginChecksums, selection.Plugin.Assets["checksums"]); err != nil {
+		return promotionLocked{}, err
+	}
+	officialChecksumRaw, err := os.ReadFile(paths.OfficialChecksums)
+	if err != nil || checksumEntry(officialChecksumRaw, selection.Official.Assets["archive"].Name) != officialArchive {
+		return promotionLocked{}, fmt.Errorf("official checksum mismatch")
+	}
+	pluginChecksumRaw, err := os.ReadFile(paths.PluginChecksums)
+	if err != nil ||
+		checksumEntry(pluginChecksumRaw, selection.Plugin.Assets["plugin"].Name) != pluginHash ||
+		checksumEntry(pluginChecksumRaw, selection.Plugin.Assets["probe"].Name) != probeHash {
+		return promotionLocked{}, fmt.Errorf("plugin checksum mismatch")
+	}
+	var metadata struct {
+		Version      string `json:"version"`
+		Tag          string `json:"tag"`
+		SourceCommit string `json:"source_commit"`
+		Platform     string `json:"platform"`
+		ABI          uint32 `json:"abi"`
+		RPC          uint32 `json:"rpc"`
+		GLIBCMax     string `json:"glibc_max"`
+	}
+	metadataRaw, err := os.ReadFile(paths.PluginMetadata)
+	if err != nil || decodeStrictPromotionJSON(metadataRaw, &metadata) != nil ||
+		metadata.Version != selection.Plugin.Version || metadata.Tag != selection.Plugin.Tag ||
+		metadata.SourceCommit != paths.PluginSourceCommit || !validLowerCommit(metadata.SourceCommit) ||
+		metadata.Platform != "linux-amd64" || metadata.ABI != 1 || metadata.RPC != 3 || metadata.GLIBCMax != "2.32" {
+		return promotionLocked{}, fmt.Errorf("plugin metadata mismatch")
+	}
+	binaryHash, err := promotionFileHash(paths.OfficialBinary)
+	if err != nil {
+		return promotionLocked{}, err
+	}
+	return promotionLocked{
+		Selection:               selection,
+		OfficialArchiveSHA256:   officialArchive,
+		OfficialChecksumsSHA256: officialChecksums,
+		OfficialBinarySHA256:    binaryHash,
+		PluginSHA256:            pluginHash,
+		ProbeSHA256:             probeHash,
+		PluginSourceCommit:      metadata.SourceCommit,
+	}, nil
+}
+
+func buildPromotionResult(locked promotionLocked, pluginReport, coreReport promotionProbeReport, previous *approvedManifest, sourceCommit string) (promotionResult, error) {
+	if !validLowerCommit(sourceCommit) ||
+		pluginReport.SchemaVersion != 1 || !pluginReport.Compatible || pluginReport.Code != "ok" ||
+		coreReport.SchemaVersion != 1 || !coreReport.Compatible || coreReport.Code != "ok" ||
+		validateApprovedCompatibility(approvedCompatibility{
+			SchemaVersion: pluginReport.SchemaVersion,
+			Plugin:        true, CoreOnly: true,
+			ConfigGeneration: pluginReport.ConfigGeneration,
+			ConfigDigest:     pluginReport.ConfigDigest,
+			Scenarios:        pluginReport.Scenarios,
+		}) != nil {
+		return promotionResult{}, fmt.Errorf("compatibility gate failed")
+	}
+	if previous != nil {
+		if _, err := selectPromotionCandidates(
+			mustMarshalPromotionReleases([]promotionRelease{selectedToRelease(locked.Selection.Official)}),
+			mustMarshalPromotionReleases([]promotionRelease{selectedToRelease(locked.Selection.Plugin)}),
+			previous,
+		); err != nil {
+			return promotionResult{}, err
+		}
+	}
+	generation := uint64(1)
+	var prior *string
+	if previous != nil {
+		generation = previous.ChannelGeneration + 1
+		priorValue := previous.Fingerprint
+		prior = &priorValue
+	}
+	officialAsset := locked.Selection.Official.Assets["archive"]
+	officialChecksums := locked.Selection.Official.Assets["checksums"]
+	pluginAsset := locked.Selection.Plugin.Assets["plugin"]
+	probeAsset := locked.Selection.Plugin.Assets["probe"]
+	manifest := approvedManifest{
+		SchemaVersion: 1, VerifierSchema: 1, Channel: "stable",
+		ChannelGeneration: generation, PriorFingerprint: prior,
+		Official: approvedOfficial{
+			Repository: "router-for-me/CLIProxyAPI", ReleaseID: locked.Selection.Official.ReleaseID,
+			Tag: locked.Selection.Official.Tag, Version: locked.Selection.Official.Version,
+			Asset:        approvedAsset{Name: officialAsset.Name, ID: officialAsset.ID, Size: officialAsset.Size, SHA256: locked.OfficialArchiveSHA256},
+			Checksums:    approvedAsset{Name: officialChecksums.Name, ID: officialChecksums.ID, Size: officialChecksums.Size, SHA256: locked.OfficialChecksumsSHA256},
+			BinarySHA256: locked.OfficialBinarySHA256, Provenance: "official-checksum-only",
+		},
+		Plugin: approvedPlugin{
+			Repository: "jinpeng2700-tech/cpa-plugin-token-saver", ReleaseID: locked.Selection.Plugin.ReleaseID,
+			Tag: locked.Selection.Plugin.Tag, Version: locked.Selection.Plugin.Version, SourceCommit: locked.PluginSourceCommit,
+			Asset:      approvedAsset{Name: pluginAsset.Name, ID: pluginAsset.ID, Size: pluginAsset.Size, SHA256: locked.PluginSHA256},
+			ProbeAsset: approvedAsset{Name: probeAsset.Name, ID: probeAsset.ID, Size: probeAsset.Size, SHA256: locked.ProbeSHA256},
+			Attestation: approvedAttestation{
+				Repository: "jinpeng2700-tech/cpa-plugin-token-saver", Workflow: ".github/workflows/release.yml",
+				Ref: "refs/tags/" + locked.Selection.Plugin.Tag, SourceCommit: locked.PluginSourceCommit,
+				Issuer: "https://token.actions.githubusercontent.com",
+			},
+		},
+		Compatibility: approvedCompatibility{
+			SchemaVersion: 1, Plugin: true, CoreOnly: true,
+			ConfigGeneration: pluginReport.ConfigGeneration, ConfigDigest: pluginReport.ConfigDigest,
+			Scenarios: pluginReport.Scenarios,
+		},
+		ApprovedAttestation: approvedAttestation{
+			Repository: "jinpeng2700-tech/cpa-plugin-token-saver",
+			Workflow:   ".github/workflows/promote-cliproxyapi.yml", Ref: "refs/heads/main",
+			SourceCommit: sourceCommit, Issuer: "https://token.actions.githubusercontent.com",
+		},
+	}
+	manifest.Fingerprint = computeApprovedFingerprint(manifest)
+	if previous != nil && previous.Fingerprint == manifest.Fingerprint {
+		tag := promotionTag(manifest, previous.ChannelGeneration)
+		return promotionResult{Manifest: *previous, Channel: promotionChannel(*previous, tag), Tag: tag}, nil
+	}
+	if _, err := validateApprovedManifest(mustMarshalApprovedManifest(manifest)); err != nil {
+		return promotionResult{}, err
+	}
+	tag := promotionTag(manifest, manifest.ChannelGeneration)
+	return promotionResult{Manifest: manifest, Channel: promotionChannel(manifest, tag), Tag: tag, Publish: true}, nil
+}
+
+func verifyPromotionFile(name string, asset promotionAsset) (string, error) {
+	info, err := os.Stat(name)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || uint64(info.Size()) != asset.Size {
+		return "", fmt.Errorf("asset size mismatch")
+	}
+	hash, err := promotionFileHash(name)
+	if err != nil || asset.Digest != "sha256:"+hash {
+		return "", fmt.Errorf("asset digest mismatch")
+	}
+	return hash, nil
+}
+
+func promotionFileHash(name string) (string, error) {
+	raw, err := os.ReadFile(name)
+	if err != nil || len(raw) == 0 {
+		return "", fmt.Errorf("asset read failed")
+	}
+	sum := sha256.Sum256(raw)
+	return fmt.Sprintf("%x", sum), nil
+}
+
+func checksumEntry(raw []byte, name string) string {
+	found := ""
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[1] != name || !validLowerSHA256(strings.ToLower(fields[0])) {
+			continue
+		}
+		if found != "" {
+			return ""
+		}
+		found = strings.ToLower(fields[0])
+	}
+	return found
+}
+
+func decodeStrictPromotionJSON(raw []byte, target any) error {
+	if err := rejectDuplicateJSONKeys(raw); err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	return ensureJSONEOF(decoder)
+}
+
+func selectedToRelease(selected selectedRelease) promotionRelease {
+	assets := make([]promotionAsset, 0, len(selected.Assets))
+	for _, asset := range selected.Assets {
+		assets = append(assets, asset)
+	}
+	return promotionRelease{ID: selected.ReleaseID, TagName: selected.Tag, Assets: assets}
+}
+
+func mustMarshalPromotionReleases(releases []promotionRelease) []byte {
+	raw, err := json.Marshal([][]promotionRelease{releases})
+	if err != nil {
+		panic(err)
+	}
+	return raw
+}
+
+func mustMarshalApprovedManifest(manifest approvedManifest) []byte {
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		panic(err)
+	}
+	return raw
+}
+
+func promotionChannel(manifest approvedManifest, tag string) map[string]any {
+	return map[string]any{
+		"schema_version": 1, "channel": "stable",
+		"channel_generation": manifest.ChannelGeneration,
+		"fingerprint":        manifest.Fingerprint, "approved_tag": tag,
+		"manifest_asset": "approved-release.json",
+	}
+}
+
+func promotionTag(manifest approvedManifest, generation uint64) string {
+	return "approved-cli-" + manifest.Official.Tag + "-plugin-" + manifest.Plugin.Tag + "-g" + strconv.FormatUint(generation, 10)
+}
+
+func rejectDuplicateJSONKeys(raw []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if err := scanJSONValue(decoder); err != nil {
+		return err
+	}
+	return ensureJSONEOF(decoder)
+}
+
+func scanJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		seen := map[string]struct{}{}
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return fmt.Errorf("object key is not a string")
+			}
+			if _, duplicate := seen[key]; duplicate {
+				return fmt.Errorf("duplicate key %q", key)
+			}
+			seen[key] = struct{}{}
+			if err := scanJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		end, err := decoder.Token()
+		if err != nil || end != json.Delim('}') {
+			return fmt.Errorf("invalid object")
+		}
+	case '[':
+		for decoder.More() {
+			if err := scanJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		end, err := decoder.Token()
+		if err != nil || end != json.Delim(']') {
+			return fmt.Errorf("invalid array")
+		}
+	default:
+		return fmt.Errorf("unexpected delimiter %q", delimiter)
+	}
+	return nil
+}
+
+func ensureJSONEOF(decoder *json.Decoder) error {
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("trailing JSON")
+		}
+		return err
+	}
+	return nil
+}
+
+func validateApprovedManifestFields(manifest approvedManifest) error {
+	if manifest.SchemaVersion != 1 || manifest.VerifierSchema != 1 || manifest.Channel != "stable" ||
+		manifest.ChannelGeneration == 0 {
+		return fmt.Errorf("invalid manifest header")
+	}
+	if manifest.ChannelGeneration == 1 {
+		if manifest.PriorFingerprint != nil {
+			return fmt.Errorf("genesis manifest has a predecessor")
+		}
+	} else if manifest.PriorFingerprint == nil || !validPromotionFingerprint(*manifest.PriorFingerprint) {
+		return fmt.Errorf("manifest predecessor is missing")
+	}
+	if err := validateApprovedOfficial(manifest.Official); err != nil {
+		return err
+	}
+	if err := validateApprovedPlugin(manifest.Plugin); err != nil {
+		return err
+	}
+	if err := validateApprovedCompatibility(manifest.Compatibility); err != nil {
+		return err
+	}
+	if !validAttestation(
+		manifest.ApprovedAttestation,
+		"jinpeng2700-tech/cpa-plugin-token-saver",
+		".github/workflows/promote-cliproxyapi.yml",
+		"refs/heads/main",
+		manifest.ApprovedAttestation.SourceCommit,
+	) {
+		return fmt.Errorf("invalid approved attestation identity")
+	}
+	if manifest.Fingerprint != computeApprovedFingerprint(manifest) {
+		return fmt.Errorf("approved fingerprint mismatch")
+	}
+	return nil
+}
+
+func validateApprovedOfficial(official approvedOfficial) error {
+	version, ok := parsePromotionVersion(official.Tag)
+	if !ok || official.Version != strings.TrimPrefix(official.Tag, "v") ||
+		comparePromotionVersion(version, promotionVersion{}) <= 0 {
+		return fmt.Errorf("invalid official version")
+	}
+	if official.Repository != "router-for-me/CLIProxyAPI" || official.ReleaseID == 0 ||
+		official.Provenance != "official-checksum-only" ||
+		official.Asset.Name != "CLIProxyAPI_"+official.Version+"_linux_amd64.tar.gz" ||
+		official.Checksums.Name != "checksums.txt" ||
+		!validApprovedAsset(official.Asset) || !validApprovedAsset(official.Checksums) ||
+		!validLowerSHA256(official.BinarySHA256) {
+		return fmt.Errorf("invalid official identity")
+	}
+	return nil
+}
+
+func validateApprovedPlugin(plugin approvedPlugin) error {
+	version, ok := parsePromotionVersion(plugin.Tag)
+	if !ok || plugin.Version != strings.TrimPrefix(plugin.Tag, "v") ||
+		comparePromotionVersion(version, promotionVersion{}) <= 0 {
+		return fmt.Errorf("invalid plugin version")
+	}
+	if plugin.Repository != "jinpeng2700-tech/cpa-plugin-token-saver" || plugin.ReleaseID == 0 ||
+		!validLowerCommit(plugin.SourceCommit) ||
+		plugin.Asset.Name != "token-saver-v"+plugin.Version+"-linux-amd64.so" ||
+		plugin.ProbeAsset.Name != "compat-probe-v"+plugin.Version+"-linux-amd64" ||
+		!validApprovedAsset(plugin.Asset) || !validApprovedAsset(plugin.ProbeAsset) ||
+		!validAttestation(
+			plugin.Attestation,
+			plugin.Repository,
+			".github/workflows/release.yml",
+			"refs/tags/"+plugin.Tag,
+			plugin.SourceCommit,
+		) {
+		return fmt.Errorf("invalid plugin identity")
+	}
+	return nil
+}
+
+func validateApprovedCompatibility(compatibility approvedCompatibility) error {
+	wantScenarios := "all-off,rtk,headroom-rewrite,headroom-timeout,caveman,ponytail,fixed-order"
+	if compatibility.SchemaVersion != 1 || !compatibility.Plugin || !compatibility.CoreOnly ||
+		compatibility.ConfigGeneration == 0 || !validLowerSHA256(compatibility.ConfigDigest) ||
+		strings.Join(compatibility.Scenarios, ",") != wantScenarios {
+		return fmt.Errorf("invalid compatibility evidence")
+	}
+	return nil
+}
+
+func validApprovedAsset(asset approvedAsset) bool {
+	return asset.ID > 0 && asset.Size > 0 && validArtifactName(asset.Name) && validLowerSHA256(asset.SHA256)
+}
+
+func validArtifactName(name string) bool {
+	return name != "" && len(name) <= 200 && !strings.ContainsAny(name, `/\`) &&
+		name != "." && name != ".." && strings.IndexFunc(name, unicode.IsControl) < 0
+}
+
+func validAttestation(attestation approvedAttestation, repository, workflow, ref, sourceCommit string) bool {
+	return attestation.Repository == repository &&
+		attestation.Workflow == workflow &&
+		attestation.Ref == ref &&
+		attestation.SourceCommit == sourceCommit &&
+		validLowerCommit(attestation.SourceCommit) &&
+		attestation.Issuer == "https://token.actions.githubusercontent.com"
+}
+
+func validLowerSHA256(value string) bool {
+	return regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(value)
+}
+
+func validLowerCommit(value string) bool {
+	return regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(value)
+}
+
+func validPromotionFingerprint(value string) bool {
+	return promotionDigestPattern.MatchString(value)
+}
+
+func computeApprovedFingerprint(manifest approvedManifest) string {
+	material := struct {
+		SchemaVersion       uint32                `json:"schema_version"`
+		VerifierSchema      uint32                `json:"verifier_schema"`
+		Channel             string                `json:"channel"`
+		Official            approvedOfficial      `json:"official"`
+		Plugin              approvedPlugin        `json:"plugin"`
+		Compatibility       approvedCompatibility `json:"compatibility"`
+		ApprovedAttestation approvedAttestation   `json:"approved_attestation"`
+	}{
+		SchemaVersion:       manifest.SchemaVersion,
+		VerifierSchema:      manifest.VerifierSchema,
+		Channel:             manifest.Channel,
+		Official:            manifest.Official,
+		Plugin:              manifest.Plugin,
+		Compatibility:       manifest.Compatibility,
+		ApprovedAttestation: manifest.ApprovedAttestation,
+	}
+	raw, err := json.Marshal(material)
+	if err != nil {
+		panic(err)
+	}
+	sum := sha256.Sum256(raw)
+	return fmt.Sprintf("sha256:%x", sum)
+}
+
+func decodePromotionReleases(raw []byte) ([]promotionRelease, error) {
+	var pages [][]promotionRelease
+	if err := json.Unmarshal(raw, &pages); err == nil {
+		var releases []promotionRelease
+		for _, page := range pages {
+			releases = append(releases, page...)
+		}
+		return releases, nil
+	}
+	var releases []promotionRelease
+	if err := json.Unmarshal(raw, &releases); err != nil {
+		return nil, err
+	}
+	return releases, nil
+}
+
+func officialAssetSet(version string) map[string]string {
+	return map[string]string{
+		"archive":   "CLIProxyAPI_" + version + "_linux_amd64.tar.gz",
+		"checksums": "checksums.txt",
+	}
+}
+
+func pluginAssetSet(version string) map[string]string {
+	return map[string]string{
+		"plugin":    "token-saver-v" + version + "-linux-amd64.so",
+		"probe":     "compat-probe-v" + version + "-linux-amd64",
+		"metadata":  "release-metadata.json",
+		"checksums": "SHA256SUMS",
+	}
+}
+
+func selectPromotionRelease(releases []promotionRelease, required func(string) map[string]string) (selectedRelease, promotionVersion, error) {
+	var selected selectedRelease
+	var selectedVersion promotionVersion
+	found := false
+	for _, release := range releases {
+		version, ok := parsePromotionVersion(release.TagName)
+		if !ok || release.Draft || release.Prerelease || release.ID == 0 {
+			continue
+		}
+		versionText := strings.TrimPrefix(release.TagName, "v")
+		assets, ok := selectPromotionAssets(release.Assets, required(versionText))
+		if !ok {
+			continue
+		}
+		if found && comparePromotionVersion(version, selectedVersion) <= 0 {
+			continue
+		}
+		selected = selectedRelease{
+			ReleaseID: release.ID,
+			Tag:       release.TagName,
+			Version:   versionText,
+			Assets:    assets,
+		}
+		selectedVersion = version
+		found = true
+	}
+	if !found {
+		return selectedRelease{}, promotionVersion{}, fmt.Errorf("no valid stable release")
+	}
+	return selected, selectedVersion, nil
+}
+
+func selectPromotionAssets(assets []promotionAsset, required map[string]string) (map[string]promotionAsset, bool) {
+	selected := make(map[string]promotionAsset, len(required))
+	for key, name := range required {
+		for _, asset := range assets {
+			if asset.Name != name {
+				continue
+			}
+			if _, duplicate := selected[key]; duplicate ||
+				asset.ID == 0 || asset.Size == 0 || !promotionDigestPattern.MatchString(asset.Digest) {
+				return nil, false
+			}
+			selected[key] = asset
+		}
+		if _, ok := selected[key]; !ok {
+			return nil, false
+		}
+	}
+	return selected, true
+}
+
+func parsePromotionVersion(tag string) (promotionVersion, bool) {
+	match := promotionSemVerPattern.FindStringSubmatch(tag)
+	if match == nil {
+		return promotionVersion{}, false
+	}
+	var version promotionVersion
+	for index := range version {
+		value, err := strconv.ParseUint(match[index+1], 10, 64)
+		if err != nil {
+			return promotionVersion{}, false
+		}
+		version[index] = value
+	}
+	return version, true
+}
+
+func comparePromotionVersion(left, right promotionVersion) int {
+	for index := range left {
+		if left[index] < right[index] {
+			return -1
+		}
+		if left[index] > right[index] {
+			return 1
+		}
+	}
+	return 0
+}
+
 func readReleaseWorkflow(t *testing.T) releaseWorkflow {
 	t.Helper()
 	var workflow releaseWorkflow
 	if err := yaml.Unmarshal([]byte(readRepositoryFile(t, ".github/workflows/release.yml")), &workflow); err != nil {
 		t.Fatalf("parse release workflow: %v", err)
+	}
+	return workflow
+}
+
+func readPromotionWorkflow(t *testing.T) releaseWorkflow {
+	t.Helper()
+	var workflow releaseWorkflow
+	if err := yaml.Unmarshal([]byte(readRepositoryFile(t, ".github/workflows/promote-cliproxyapi.yml")), &workflow); err != nil {
+		t.Fatalf("parse promotion workflow: %v", err)
 	}
 	return workflow
 }
@@ -359,4 +1109,723 @@ func TestReleaseWorkflowUsesFreshImmutableBuildArtifact(t *testing.T) {
 	if !strings.Contains(compatibilityRun, "EXPECTED_MANIFEST_SHA256") {
 		t.Fatal("compatibility must compare the downloaded manifest with the build job output")
 	}
+}
+
+func TestPromotionControlPlaneFilesExist(t *testing.T) {
+	for _, name := range []string{
+		".github/workflows/promote-cliproxyapi.yml",
+		"deploy/channel.json",
+		"deploy/approved-release.schema.json",
+		"deploy/trust-policy.json",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_ = readRepositoryFile(t, name)
+		})
+	}
+}
+
+func TestPromotionWorkflowIsScheduledManualSerializedAndReadOnlyBeforePublish(t *testing.T) {
+	workflow := readPromotionWorkflow(t)
+	raw := readRepositoryFile(t, ".github/workflows/promote-cliproxyapi.yml")
+	if _, ok := workflow.On["schedule"]; !ok {
+		t.Fatal("promotion workflow must have a schedule trigger")
+	}
+	if _, ok := workflow.On["workflow_dispatch"]; !ok {
+		t.Fatal("promotion workflow must support workflow_dispatch")
+	}
+	if workflowValue(workflow.Concurrency, "group") == "" || workflowValue(workflow.Concurrency, "cancel-in-progress") != "false" {
+		t.Fatal("promotion workflow must serialize without canceling an in-progress promotion")
+	}
+	if workflow.Permissions["contents"] != "read" {
+		t.Fatal("promotion workflow must default to read-only contents")
+	}
+	if !strings.Contains(raw, `cron: "17 */6 * * *"`) {
+		t.Fatal("promotion schedule must use a non-hour cron")
+	}
+	publish := requireReleaseJob(t, workflow, "publish")
+	if !jobNeeds(publish, "compatibility") {
+		t.Fatal("publish must wait for compatibility")
+	}
+	for name, job := range workflow.Jobs {
+		for permission, access := range job.Permissions {
+			if access == "write" && name != "publish" {
+				t.Fatalf("%s job has write permission %s", name, permission)
+			}
+		}
+	}
+	for permission, want := range map[string]string{
+		"actions":      "read",
+		"attestations": "write",
+		"contents":     "write",
+		"id-token":     "write",
+	} {
+		if publish.Permissions[permission] != want {
+			t.Fatalf("publish permission %s = %q, want %q", permission, publish.Permissions[permission], want)
+		}
+	}
+}
+
+func TestPromotionSelectionChoosesHighestStableSemVerAndLocksAssetIdentity(t *testing.T) {
+	official := []promotionRelease{
+		officialReleaseFixture(100, "v7.2.9"),
+		officialReleaseFixture(101, "v7.2.10"),
+		{ID: 102, TagName: "v9.0.0", Draft: true},
+		{ID: 103, TagName: "v8.0.0", Prerelease: true},
+		officialReleaseFixture(104, "v7.02.11"),
+	}
+	plugin := []promotionRelease{
+		pluginReleaseFixture(200, "v1.0.0"),
+		pluginReleaseFixture(201, "v1.0.1"),
+		{ID: 202, TagName: "v1.1.0", Prerelease: true},
+	}
+
+	selection, err := selectPromotionCandidates(marshalPromotionFixture(t, official), marshalPromotionFixture(t, plugin), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selection.Official.Tag != "v7.2.10" || selection.Plugin.Tag != "v1.0.1" {
+		t.Fatalf("selected tags = %s and %s", selection.Official.Tag, selection.Plugin.Tag)
+	}
+	officialAsset := selection.Official.Assets["archive"]
+	if officialAsset.ID != 1011 || officialAsset.Name != "CLIProxyAPI_7.2.10_linux_amd64.tar.gz" ||
+		officialAsset.Size != 10101 || officialAsset.Digest != "sha256:"+strings.Repeat("a", 64) {
+		t.Fatalf("official asset identity was not locked: %#v", officialAsset)
+	}
+	pluginAsset := selection.Plugin.Assets["plugin"]
+	if pluginAsset.ID != 2011 || pluginAsset.Name != "token-saver-v1.0.1-linux-amd64.so" ||
+		pluginAsset.Size != 20101 || pluginAsset.Digest != "sha256:"+strings.Repeat("c", 64) {
+		t.Fatalf("plugin asset identity was not locked: %#v", pluginAsset)
+	}
+}
+
+func TestPromotionSelectionFailsClosed(t *testing.T) {
+	validOfficial := officialReleaseFixture(100, "v7.2.10")
+	validPlugin := pluginReleaseFixture(200, "v1.0.1")
+	tests := []struct {
+		name     string
+		official promotionRelease
+		plugin   promotionRelease
+		previous *approvedManifest
+	}{
+		{name: "draft official", official: withReleaseState(validOfficial, true, false), plugin: validPlugin},
+		{name: "prerelease official", official: withReleaseState(validOfficial, false, true), plugin: validPlugin},
+		{name: "malformed official tag", official: officialReleaseFixture(100, "7.2.10"), plugin: validPlugin},
+		{name: "noncanonical official tag", official: officialReleaseFixture(100, "v7.02.10"), plugin: validPlugin},
+		{name: "no plugin official asset", official: replaceAssetName(validOfficial, "archive", "CLIProxyAPI_7.2.10_linux_amd64_no-plugin.tar.gz"), plugin: validPlugin},
+		{name: "wrong official architecture", official: replaceAssetName(validOfficial, "archive", "CLIProxyAPI_7.2.10_linux_arm64.tar.gz"), plugin: validPlugin},
+		{name: "missing official checksum", official: removeAsset(validOfficial, "checksums.txt"), plugin: validPlugin},
+		{name: "missing official digest", official: clearAssetDigest(validOfficial, "archive"), plugin: validPlugin},
+		{name: "untagged plugin source", official: validOfficial, plugin: pluginReleaseFixture(200, "main")},
+		{name: "prerelease plugin", official: validOfficial, plugin: withReleaseState(validPlugin, false, true)},
+		{name: "missing plugin attested asset digest", official: validOfficial, plugin: clearAssetDigest(validPlugin, "plugin")},
+		{
+			name:     "official downgrade",
+			official: validOfficial,
+			plugin:   validPlugin,
+			previous: approvedManifestFixture("7.2.11", "1.0.1", 3, strings.Repeat("1", 64)),
+		},
+		{
+			name:     "plugin downgrade",
+			official: officialReleaseFixture(100, "v7.2.11"),
+			plugin:   validPlugin,
+			previous: approvedManifestFixture("7.2.10", "1.0.2", 3, strings.Repeat("1", 64)),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := selectPromotionCandidates(
+				marshalPromotionFixture(t, []promotionRelease{tt.official}),
+				marshalPromotionFixture(t, []promotionRelease{tt.plugin}),
+				tt.previous,
+			)
+			if err == nil {
+				t.Fatal("invalid release selection succeeded")
+			}
+		})
+	}
+}
+
+func TestApprovedManifestStrictParserAcceptsCanonicalFixture(t *testing.T) {
+	want := approvedManifestFixture("7.2.137", "1.0.1", 4, "")
+	raw := marshalApprovedManifest(t, want)
+	got, err := validateApprovedManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Fingerprint != want.Fingerprint || got.ChannelGeneration != 4 ||
+		got.Official.Asset.ID != 71371 || got.Plugin.Asset.ID != 1011 {
+		t.Fatalf("parsed approved manifest lost locked identity: %#v", got)
+	}
+}
+
+func TestApprovedManifestRejectsAmbiguousOrUnsafeJSON(t *testing.T) {
+	valid := string(marshalApprovedManifest(t, approvedManifestFixture("7.2.137", "1.0.1", 4, "")))
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "duplicate key", raw: strings.Replace(valid, `"schema_version":1`, `"schema_version":1,"schema_version":1`, 1)},
+		{name: "unknown field", raw: strings.Replace(valid, `"verifier_schema":1`, `"verifier_schema":1,"unknown":true`, 1)},
+		{name: "noncanonical version", raw: strings.Replace(valid, `"version":"1.0.1"`, `"version":"01.0.1"`, 1)},
+		{name: "overflow", raw: strings.Replace(valid, `"channel_generation":4`, `"channel_generation":18446744073709551616`, 1)},
+		{name: "control artifact name", raw: strings.Replace(valid, `"name":"token-saver-v1.0.1-linux-amd64.so"`, `"name":"token-saver-\u0001.so"`, 1)},
+		{name: "path-like artifact name", raw: strings.Replace(valid, `"name":"token-saver-v1.0.1-linux-amd64.so"`, `"name":"../token-saver.so"`, 1)},
+		{name: "wrong official repository", raw: strings.Replace(valid, `"repository":"router-for-me/CLIProxyAPI"`, `"repository":"attacker/CLIProxyAPI"`, 1)},
+		{name: "wrong plugin workflow", raw: strings.Replace(valid, `"workflow":".github/workflows/release.yml"`, `"workflow":".github/workflows/other.yml"`, 1)},
+		{name: "wrong plugin ref", raw: strings.Replace(valid, `"ref":"refs/tags/v1.0.1"`, `"ref":"refs/heads/main"`, 1)},
+		{name: "missing attestation", raw: strings.Replace(valid, `"issuer":"https://token.actions.githubusercontent.com"`, `"issuer":""`, 1)},
+		{name: "missing checksum identity", raw: strings.Replace(valid, `"name":"checksums.txt"`, `"name":""`, 1)},
+		{name: "trailing JSON", raw: valid + `{}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := validateApprovedManifest([]byte(tt.raw)); err == nil {
+				t.Fatal("invalid approved manifest succeeded")
+			}
+		})
+	}
+}
+
+func TestApprovedManifestSchemaAndTrustPolicyAreClosed(t *testing.T) {
+	var schema map[string]any
+	if err := json.Unmarshal([]byte(readRepositoryFile(t, "deploy/approved-release.schema.json")), &schema); err != nil {
+		t.Fatal(err)
+	}
+	if schema["$schema"] != "https://json-schema.org/draft/2020-12/schema" ||
+		schema["additionalProperties"] != false {
+		t.Fatal("approved release schema must use draft 2020-12 and reject unknown top-level fields")
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("approved release schema has no properties")
+	}
+	for _, name := range []string{
+		"schema_version", "verifier_schema", "channel", "channel_generation", "prior_fingerprint",
+		"fingerprint", "official", "plugin", "compatibility", "approved_attestation",
+	} {
+		if _, ok := properties[name]; !ok {
+			t.Errorf("approved release schema missing %q", name)
+		}
+	}
+
+	var policy struct {
+		SchemaVersion  uint32 `json:"schema_version"`
+		VerifierSchema uint32 `json:"verifier_schema"`
+		Official       struct {
+			Repository string `json:"repository"`
+			Provenance string `json:"provenance"`
+		} `json:"official"`
+		Plugin   approvedAttestation `json:"plugin_attestation"`
+		Approved approvedAttestation `json:"approved_attestation"`
+	}
+	if err := json.Unmarshal([]byte(readRepositoryFile(t, "deploy/trust-policy.json")), &policy); err != nil {
+		t.Fatal(err)
+	}
+	if policy.SchemaVersion != 1 || policy.VerifierSchema != 1 ||
+		policy.Official.Repository != "router-for-me/CLIProxyAPI" ||
+		policy.Official.Provenance != "official-checksum-only" ||
+		policy.Plugin.Repository != "jinpeng2700-tech/cpa-plugin-token-saver" ||
+		policy.Plugin.Workflow != ".github/workflows/release.yml" ||
+		policy.Approved.Workflow != ".github/workflows/promote-cliproxyapi.yml" ||
+		policy.Approved.Ref != "refs/heads/main" {
+		t.Fatalf("trust policy identity is incomplete: %#v", policy)
+	}
+
+	var channel map[string]any
+	if err := json.Unmarshal([]byte(readRepositoryFile(t, "deploy/channel.json")), &channel); err != nil {
+		t.Fatal(err)
+	}
+	if channel["schema_version"] != float64(1) || channel["channel"] != "stable" ||
+		channel["channel_generation"] != float64(0) || channel["fingerprint"] != nil ||
+		channel["approved_tag"] != nil || channel["manifest_asset"] != "approved-release.json" {
+		t.Fatalf("channel genesis is invalid: %#v", channel)
+	}
+}
+
+func TestPromotionLocksBytesBeforeCompatibility(t *testing.T) {
+	root := t.TempDir()
+	paths := promotionPaths{
+		OfficialArchive:    filepath.Join(root, "official.tar.gz"),
+		OfficialChecksums:  filepath.Join(root, "checksums.txt"),
+		OfficialBinary:     filepath.Join(root, "cli-proxy-api"),
+		Plugin:             filepath.Join(root, "token-saver.so"),
+		Probe:              filepath.Join(root, "compat-probe"),
+		PluginMetadata:     filepath.Join(root, "release-metadata.json"),
+		PluginChecksums:    filepath.Join(root, "SHA256SUMS"),
+		PluginSourceCommit: strings.Repeat("d", 40),
+	}
+	writePromotionFile(t, paths.OfficialArchive, "official archive")
+	writePromotionFile(t, paths.OfficialBinary, "official binary")
+	writePromotionFile(t, paths.Plugin, "plugin bytes")
+	writePromotionFile(t, paths.Probe, "probe bytes")
+
+	selection, err := selectPromotionCandidates(
+		marshalPromotionFixture(t, []promotionRelease{officialReleaseFixture(7137, "v7.2.137")}),
+		marshalPromotionFixture(t, []promotionRelease{pluginReleaseFixture(101, "v1.0.1")}),
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setLockedAsset(t, &selection.Official, "archive", paths.OfficialArchive)
+	setLockedAsset(t, &selection.Plugin, "plugin", paths.Plugin)
+	setLockedAsset(t, &selection.Plugin, "probe", paths.Probe)
+	writePromotionFile(t, paths.OfficialChecksums, fileSHA256(t, paths.OfficialArchive)+"  "+selection.Official.Assets["archive"].Name+"\n")
+	setLockedAsset(t, &selection.Official, "checksums", paths.OfficialChecksums)
+	writePromotionFile(t, paths.PluginMetadata, `{"version":"1.0.1","tag":"v1.0.1","source_commit":"`+strings.Repeat("d", 40)+`","platform":"linux-amd64","abi":1,"rpc":3,"glibc_max":"2.32"}`)
+	setLockedAsset(t, &selection.Plugin, "metadata", paths.PluginMetadata)
+	writePromotionFile(t, paths.PluginChecksums,
+		fileSHA256(t, paths.Probe)+"  "+selection.Plugin.Assets["probe"].Name+"\n"+
+			fileSHA256(t, paths.Plugin)+"  "+selection.Plugin.Assets["plugin"].Name+"\n")
+	setLockedAsset(t, &selection.Plugin, "checksums", paths.PluginChecksums)
+
+	locked, err := lockPromotionArtifacts(selection, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if locked.OfficialArchiveSHA256 != fileSHA256(t, paths.OfficialArchive) ||
+		locked.PluginSHA256 != fileSHA256(t, paths.Plugin) ||
+		locked.PluginSourceCommit != strings.Repeat("d", 40) {
+		t.Fatalf("locked identity is incomplete: %#v", locked)
+	}
+	writePromotionFile(t, paths.Plugin, "tampered")
+	if _, err := lockPromotionArtifacts(selection, paths); err == nil {
+		t.Fatal("tampered candidate bytes were accepted")
+	}
+}
+
+func TestPromotionGenerationIsMonotonicAndDuplicateConverges(t *testing.T) {
+	locked := promotionLockedFixture(t, "7.2.138", "1.0.1")
+	pluginReport := validPromotionPluginReport()
+	coreReport := promotionProbeReport{SchemaVersion: 1, Compatible: true, Code: "ok"}
+	previous := approvedManifestFixture("7.2.137", "1.0.1", 4, "")
+
+	result, err := buildPromotionResult(locked, pluginReport, coreReport, previous, strings.Repeat("2", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Publish || result.Manifest.ChannelGeneration != 5 ||
+		result.Manifest.PriorFingerprint == nil || *result.Manifest.PriorFingerprint != previous.Fingerprint {
+		t.Fatalf("new promotion lineage is invalid: %#v", result)
+	}
+	if _, err := validateApprovedManifest(marshalApprovedManifest(t, &result.Manifest)); err != nil {
+		t.Fatalf("generated manifest is invalid: %v", err)
+	}
+
+	duplicate, err := buildPromotionResult(locked, pluginReport, coreReport, &result.Manifest, strings.Repeat("2", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicate.Publish || duplicate.Manifest.ChannelGeneration != result.Manifest.ChannelGeneration ||
+		duplicate.Manifest.Fingerprint != result.Manifest.Fingerprint {
+		t.Fatalf("duplicate promotion did not converge: %#v", duplicate)
+	}
+}
+
+func TestPromotionCompatibilityFailureProducesNoManifest(t *testing.T) {
+	locked := promotionLockedFixture(t, "7.2.138", "1.0.1")
+	failed := validPromotionPluginReport()
+	failed.Compatible = false
+	failed.Code = "self_test_failed"
+	if _, err := buildPromotionResult(locked, failed, promotionProbeReport{SchemaVersion: 1, Compatible: true, Code: "ok"}, nil, strings.Repeat("2", 40)); err == nil {
+		t.Fatal("compatibility failure produced an approved manifest")
+	}
+}
+
+func TestPromotionWorkflowLocksExactAssetsRunsGateAndPublishesImmutably(t *testing.T) {
+	workflow := readPromotionWorkflow(t)
+	discover := requireReleaseJob(t, workflow, "discover")
+	compatibility := requireReleaseJob(t, workflow, "compatibility")
+	publish := requireReleaseJob(t, workflow, "publish")
+	if !jobNeeds(compatibility, "discover") || !jobNeeds(publish, "compatibility") {
+		t.Fatal("promotion job ordering is incomplete")
+	}
+	all := joinedRun(discover) + "\n" + joinedRun(compatibility) + "\n" + joinedRun(publish)
+	for _, want := range []string{
+		"--paginate", "PROMOTION_COMMAND=select", "/releases/assets/", "PROMOTION_COMMAND=lock",
+		"gh attestation verify", "-mode core-only", "TestRealCandidate", "PROMOTION_COMMAND=manifest",
+		"gh release create", "approved-release.json", "channel.json",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("promotion workflow missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"/releases/latest", "gh release upload", "--clobber", "_no-plugin"} {
+		if strings.Contains(all, forbidden) {
+			t.Errorf("promotion workflow contains forbidden %q", forbidden)
+		}
+	}
+	if strings.Index(all, "PROMOTION_COMMAND=lock") >= strings.Index(all, `"$probe" -candidate`) {
+		t.Fatal("candidate identities must be locked before compatibility execution")
+	}
+	for _, job := range workflow.Jobs {
+		for _, step := range job.Steps {
+			if step.Uses == "" {
+				continue
+			}
+			if !regexp.MustCompile(`^[^@\s]+@[0-9a-f]{40}$`).MatchString(step.Uses) {
+				t.Errorf("promotion action is not pinned: %s", step.Uses)
+			}
+			if strings.HasPrefix(step.Uses, "actions/checkout@") && workflowValue(step.With, "persist-credentials") != "false" {
+				t.Fatal("promotion checkout persists credentials")
+			}
+		}
+	}
+}
+
+func TestPromotionCommand(t *testing.T) {
+	command := os.Getenv("PROMOTION_COMMAND")
+	if command == "" {
+		t.Skip("PROMOTION_COMMAND is not set")
+	}
+	switch command {
+	case "select":
+		official := readPromotionCommandFile(t, "OFFICIAL_RELEASES")
+		plugin := readPromotionCommandFile(t, "PLUGIN_RELEASES")
+		previous := newestApprovedManifest(t, os.Getenv("PREVIOUS_DIR"))
+		selection, err := selectPromotionCandidates(official, plugin, previous)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writePromotionJSON(t, os.Getenv("SELECTION_OUTPUT"), selection)
+		if previous == nil {
+			writePromotionFile(t, os.Getenv("PREVIOUS_OUTPUT"), "null\n")
+		} else {
+			writePromotionJSON(t, os.Getenv("PREVIOUS_OUTPUT"), previous)
+		}
+	case "lock":
+		var selection promotionSelection
+		readPromotionJSON(t, os.Getenv("SELECTION_INPUT"), &selection)
+		locked, err := lockPromotionArtifacts(selection, promotionPaths{
+			OfficialArchive:    os.Getenv("OFFICIAL_ARCHIVE"),
+			OfficialChecksums:  os.Getenv("OFFICIAL_CHECKSUMS"),
+			OfficialBinary:     os.Getenv("OFFICIAL_BINARY"),
+			Plugin:             os.Getenv("PLUGIN_ASSET"),
+			Probe:              os.Getenv("PROBE_ASSET"),
+			PluginMetadata:     os.Getenv("PLUGIN_METADATA"),
+			PluginChecksums:    os.Getenv("PLUGIN_CHECKSUMS"),
+			PluginSourceCommit: os.Getenv("PLUGIN_SOURCE_COMMIT"),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		writePromotionJSON(t, os.Getenv("LOCKED_OUTPUT"), locked)
+	case "manifest":
+		var locked promotionLocked
+		var pluginReport, coreReport promotionProbeReport
+		readPromotionJSON(t, os.Getenv("LOCKED_INPUT"), &locked)
+		readPromotionJSON(t, os.Getenv("PLUGIN_REPORT"), &pluginReport)
+		readPromotionJSON(t, os.Getenv("CORE_REPORT"), &coreReport)
+		previous := readOptionalApprovedManifest(t, os.Getenv("PREVIOUS_INPUT"))
+		result, err := buildPromotionResult(locked, pluginReport, coreReport, previous, os.Getenv("SOURCE_COMMIT"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writePromotionJSON(t, os.Getenv("MANIFEST_OUTPUT"), result.Manifest)
+		writePromotionJSON(t, os.Getenv("CHANNEL_OUTPUT"), result.Channel)
+		writePromotionJSON(t, os.Getenv("RESULT_OUTPUT"), map[string]any{"publish": result.Publish, "tag": result.Tag})
+	case "validate":
+		if _, err := validateApprovedManifest(readPromotionCommandFile(t, "MANIFEST_INPUT")); err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatalf("unknown PROMOTION_COMMAND %q", command)
+	}
+}
+
+func marshalPromotionFixture(t *testing.T, releases []promotionRelease) []byte {
+	t.Helper()
+	raw, err := json.Marshal([][]promotionRelease{releases})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func officialReleaseFixture(id uint64, tag string) promotionRelease {
+	version := strings.TrimPrefix(tag, "v")
+	return promotionRelease{
+		ID: id, TagName: tag,
+		Assets: []promotionAsset{
+			{ID: id*10 + 1, Name: "CLIProxyAPI_" + version + "_linux_amd64.tar.gz", Size: id*100 + 1, Digest: "sha256:" + strings.Repeat("a", 64)},
+			{ID: id*10 + 2, Name: "checksums.txt", Size: id*100 + 2, Digest: "sha256:" + strings.Repeat("b", 64)},
+		},
+	}
+}
+
+func pluginReleaseFixture(id uint64, tag string) promotionRelease {
+	version := strings.TrimPrefix(tag, "v")
+	return promotionRelease{
+		ID: id, TagName: tag,
+		Assets: []promotionAsset{
+			{ID: id*10 + 1, Name: "token-saver-v" + version + "-linux-amd64.so", Size: id*100 + 1, Digest: "sha256:" + strings.Repeat("c", 64)},
+			{ID: id*10 + 2, Name: "compat-probe-v" + version + "-linux-amd64", Size: id*100 + 2, Digest: "sha256:" + strings.Repeat("d", 64)},
+			{ID: id*10 + 3, Name: "release-metadata.json", Size: id*100 + 3, Digest: "sha256:" + strings.Repeat("e", 64)},
+			{ID: id*10 + 4, Name: "SHA256SUMS", Size: id*100 + 4, Digest: "sha256:" + strings.Repeat("f", 64)},
+		},
+	}
+}
+
+func withReleaseState(release promotionRelease, draft, prerelease bool) promotionRelease {
+	release.Draft = draft
+	release.Prerelease = prerelease
+	return release
+}
+
+func replaceAssetName(release promotionRelease, key, name string) promotionRelease {
+	index := promotionAssetIndex(release, key)
+	release.Assets[index].Name = name
+	return release
+}
+
+func removeAsset(release promotionRelease, name string) promotionRelease {
+	for index, asset := range release.Assets {
+		if asset.Name == name {
+			release.Assets = append(release.Assets[:index], release.Assets[index+1:]...)
+			return release
+		}
+	}
+	return release
+}
+
+func clearAssetDigest(release promotionRelease, key string) promotionRelease {
+	index := promotionAssetIndex(release, key)
+	release.Assets[index].Digest = ""
+	return release
+}
+
+func promotionAssetIndex(release promotionRelease, key string) int {
+	for index, asset := range release.Assets {
+		switch key {
+		case "archive":
+			if strings.HasPrefix(asset.Name, "CLIProxyAPI_") {
+				return index
+			}
+		case "plugin":
+			if strings.HasPrefix(asset.Name, "token-saver-") {
+				return index
+			}
+		}
+	}
+	panic("fixture asset not found")
+}
+
+func approvedManifestFixture(officialVersion, pluginVersion string, generation uint64, fingerprint string) *approvedManifest {
+	prior := "sha256:" + strings.Repeat("0", 64)
+	manifest := &approvedManifest{
+		SchemaVersion:     1,
+		VerifierSchema:    1,
+		Channel:           "stable",
+		ChannelGeneration: generation,
+		PriorFingerprint:  &prior,
+		Official: approvedOfficial{
+			Repository: "router-for-me/CLIProxyAPI",
+			ReleaseID:  7137,
+			Tag:        "v" + officialVersion,
+			Version:    officialVersion,
+			Asset: approvedAsset{
+				Name: "CLIProxyAPI_" + officialVersion + "_linux_amd64.tar.gz",
+				ID:   71371, Size: 713701, SHA256: strings.Repeat("a", 64),
+			},
+			Checksums: approvedAsset{
+				Name: "checksums.txt",
+				ID:   71372, Size: 713702, SHA256: strings.Repeat("b", 64),
+			},
+			BinarySHA256: strings.Repeat("c", 64),
+			Provenance:   "official-checksum-only",
+		},
+		Plugin: approvedPlugin{
+			Repository:   "jinpeng2700-tech/cpa-plugin-token-saver",
+			ReleaseID:    101,
+			Tag:          "v" + pluginVersion,
+			Version:      pluginVersion,
+			SourceCommit: strings.Repeat("d", 40),
+			Asset: approvedAsset{
+				Name: "token-saver-v" + pluginVersion + "-linux-amd64.so",
+				ID:   1011, Size: 10101, SHA256: strings.Repeat("e", 64),
+			},
+			ProbeAsset: approvedAsset{
+				Name: "compat-probe-v" + pluginVersion + "-linux-amd64",
+				ID:   1012, Size: 10102, SHA256: strings.Repeat("f", 64),
+			},
+			Attestation: approvedAttestation{
+				Repository:   "jinpeng2700-tech/cpa-plugin-token-saver",
+				Workflow:     ".github/workflows/release.yml",
+				Ref:          "refs/tags/v" + pluginVersion,
+				SourceCommit: strings.Repeat("d", 40),
+				Issuer:       "https://token.actions.githubusercontent.com",
+			},
+		},
+		Compatibility: approvedCompatibility{
+			SchemaVersion: 1,
+			Plugin:        true, CoreOnly: true,
+			ConfigGeneration: 8,
+			ConfigDigest:     strings.Repeat("1", 64),
+			Scenarios:        []string{"all-off", "rtk", "headroom-rewrite", "headroom-timeout", "caveman", "ponytail", "fixed-order"},
+		},
+		ApprovedAttestation: approvedAttestation{
+			Repository:   "jinpeng2700-tech/cpa-plugin-token-saver",
+			Workflow:     ".github/workflows/promote-cliproxyapi.yml",
+			Ref:          "refs/heads/main",
+			SourceCommit: strings.Repeat("2", 40),
+			Issuer:       "https://token.actions.githubusercontent.com",
+		},
+	}
+	if generation == 1 {
+		manifest.PriorFingerprint = nil
+	}
+	if fingerprint == "" {
+		manifest.Fingerprint = computeApprovedFingerprint(*manifest)
+	} else {
+		manifest.Fingerprint = "sha256:" + fingerprint
+	}
+	return manifest
+}
+
+func marshalApprovedManifest(t *testing.T, manifest *approvedManifest) []byte {
+	t.Helper()
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func writePromotionFile(t *testing.T, name, content string) {
+	t.Helper()
+	if err := os.WriteFile(name, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func fileSHA256(t *testing.T, name string) string {
+	t.Helper()
+	raw, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	return fmt.Sprintf("%x", sum)
+}
+
+func setLockedAsset(t *testing.T, release *selectedRelease, key, name string) {
+	t.Helper()
+	info, err := os.Stat(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset := release.Assets[key]
+	asset.Size = uint64(info.Size())
+	asset.Digest = "sha256:" + fileSHA256(t, name)
+	release.Assets[key] = asset
+}
+
+func promotionLockedFixture(t *testing.T, officialVersion, pluginVersion string) promotionLocked {
+	t.Helper()
+	selection, err := selectPromotionCandidates(
+		marshalPromotionFixture(t, []promotionRelease{officialReleaseFixture(7138, "v"+officialVersion)}),
+		marshalPromotionFixture(t, []promotionRelease{pluginReleaseFixture(101, "v"+pluginVersion)}),
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return promotionLocked{
+		Selection:               selection,
+		OfficialArchiveSHA256:   strings.Repeat("a", 64),
+		OfficialChecksumsSHA256: strings.Repeat("b", 64),
+		OfficialBinarySHA256:    strings.Repeat("c", 64),
+		PluginSHA256:            strings.Repeat("d", 64),
+		ProbeSHA256:             strings.Repeat("e", 64),
+		PluginSourceCommit:      strings.Repeat("f", 40),
+	}
+}
+
+func validPromotionPluginReport() promotionProbeReport {
+	return promotionProbeReport{
+		SchemaVersion:    1,
+		Compatible:       true,
+		Code:             "ok",
+		ConfigGeneration: 8,
+		ConfigDigest:     strings.Repeat("1", 64),
+		Scenarios:        []string{"all-off", "rtk", "headroom-rewrite", "headroom-timeout", "caveman", "ponytail", "fixed-order"},
+	}
+}
+
+func readPromotionCommandFile(t *testing.T, environment string) []byte {
+	t.Helper()
+	name := os.Getenv(environment)
+	if name == "" {
+		t.Fatalf("%s is not set", environment)
+	}
+	raw, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func readPromotionJSON(t *testing.T, name string, target any) {
+	t.Helper()
+	raw, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := decodeStrictPromotionJSON(raw, target); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writePromotionJSON(t *testing.T, name string, value any) {
+	t.Helper()
+	raw, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePromotionFile(t, name, string(raw)+"\n")
+}
+
+func readOptionalApprovedManifest(t *testing.T, name string) *approvedManifest {
+	t.Helper()
+	raw, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(raw)) == "null" {
+		return nil
+	}
+	manifest, err := validateApprovedManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &manifest
+}
+
+func newestApprovedManifest(t *testing.T, directory string) *approvedManifest {
+	t.Helper()
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var newest *approvedManifest
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(directory, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		manifest, err := validateApprovedManifest(raw)
+		if err != nil {
+			t.Fatalf("invalid prior approved manifest %s: %v", entry.Name(), err)
+		}
+		if newest == nil || manifest.ChannelGeneration > newest.ChannelGeneration {
+			copy := manifest
+			newest = &copy
+		} else if manifest.ChannelGeneration == newest.ChannelGeneration && manifest.Fingerprint != newest.Fingerprint {
+			t.Fatal("ambiguous approved channel generation")
+		}
+	}
+	return newest
 }

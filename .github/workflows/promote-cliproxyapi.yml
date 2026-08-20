@@ -1,0 +1,255 @@
+name: promote CLIProxyAPI
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promote-cliproxyapi-stable
+  cancel-in-progress: false
+
+env:
+  OFFICIAL_REPOSITORY: router-for-me/CLIProxyAPI
+  PLUGIN_REPOSITORY: jinpeng2700-tech/cpa-plugin-token-saver
+
+jobs:
+  discover:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: "1.26.5"
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Enumerate releases and prior approved manifests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/promotion"
+          mkdir -p "$root/prior"
+          gh api --paginate --slurp "repos/${OFFICIAL_REPOSITORY}/releases?per_page=100" > "$root/official.json"
+          gh api --paginate --slurp "repos/${PLUGIN_REPOSITORY}/releases?per_page=100" > "$root/plugin.json"
+          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$root/approved.json"
+          jq -r '.[][] | select(.draft == false and .prerelease == false and (.tag_name | startswith("approved-cli-"))) |
+            .assets[]? | select(.name == "approved-release.json") | .id' "$root/approved.json" |
+          while IFS= read -r asset_id; do
+            gh api -H "Accept: application/octet-stream" \
+              "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" > "$root/prior/${asset_id}.json"
+          done
+      - name: Select highest valid stable pair
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/promotion"
+          PROMOTION_COMMAND=select \
+          OFFICIAL_RELEASES="$root/official.json" \
+          PLUGIN_RELEASES="$root/plugin.json" \
+          PREVIOUS_DIR="$root/prior" \
+          SELECTION_OUTPUT="$root/selection.json" \
+          PREVIOUS_OUTPUT="$root/previous.json" \
+            go test -count=1 -run '^TestPromotionCommand$' ./deploy/tests
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: promotion-selection-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/promotion/selection.json
+            ${{ runner.temp }}/promotion/previous.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: false
+
+  compatibility:
+    needs: discover
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      publish: ${{ steps.result.outputs.publish }}
+      tag: ${{ steps.result.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: "1.26.5"
+          cache: true
+          cache-dependency-path: go.sum
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: promotion-selection-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/promotion
+      - name: Download exact selected asset IDs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/promotion"
+          mkdir -p "$root/assets" "$root/extracted"
+          download() {
+            repository=$1
+            key=$2
+            output=$3
+            asset_id=$(jq -er "$key.id" "$root/selection.json")
+            gh api -H "Accept: application/octet-stream" \
+              "repos/${repository}/releases/assets/${asset_id}" > "$output"
+          }
+          official_name=$(jq -er '.official.assets.archive.name' "$root/selection.json")
+          plugin_name=$(jq -er '.plugin.assets.plugin.name' "$root/selection.json")
+          probe_name=$(jq -er '.plugin.assets.probe.name' "$root/selection.json")
+          download "$OFFICIAL_REPOSITORY" '.official.assets.archive' "$root/assets/$official_name"
+          download "$OFFICIAL_REPOSITORY" '.official.assets.checksums' "$root/assets/checksums.txt"
+          download "$PLUGIN_REPOSITORY" '.plugin.assets.plugin' "$root/assets/$plugin_name"
+          download "$PLUGIN_REPOSITORY" '.plugin.assets.probe' "$root/assets/$probe_name"
+          download "$PLUGIN_REPOSITORY" '.plugin.assets.metadata' "$root/assets/release-metadata.json"
+          download "$PLUGIN_REPOSITORY" '.plugin.assets.checksums' "$root/assets/SHA256SUMS"
+          plugin_tag=$(jq -er '.plugin.tag' "$root/selection.json")
+          gh api "repos/${PLUGIN_REPOSITORY}/commits/${plugin_tag}" --jq .sha > "$root/plugin-source-commit"
+          tar -xzf "$root/assets/$official_name" -C "$root/extracted"
+          find "$root/extracted" -type f \( -name cli-proxy-api -o -name CLIProxyAPI \) -print > "$root/candidates"
+          test "$(wc -l < "$root/candidates")" -eq 1
+      - name: Verify plugin release attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/promotion"
+          plugin_tag=$(jq -er '.plugin.tag' "$root/selection.json")
+          identity="https://github.com/${PLUGIN_REPOSITORY}/.github/workflows/release.yml@refs/tags/${plugin_tag}"
+          gh attestation verify "$root/assets/$(jq -er '.plugin.assets.plugin.name' "$root/selection.json")" \
+            --repo "$PLUGIN_REPOSITORY" --cert-identity "$identity" \
+            --cert-oidc-issuer "https://token.actions.githubusercontent.com"
+          gh attestation verify "$root/assets/$(jq -er '.plugin.assets.probe.name' "$root/selection.json")" \
+            --repo "$PLUGIN_REPOSITORY" --cert-identity "$identity" \
+            --cert-oidc-issuer "https://token.actions.githubusercontent.com"
+      - name: Lock candidate bytes and identities
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/promotion"
+          PROMOTION_COMMAND=lock \
+          SELECTION_INPUT="$root/selection.json" \
+          OFFICIAL_ARCHIVE="$root/assets/$(jq -er '.official.assets.archive.name' "$root/selection.json")" \
+          OFFICIAL_CHECKSUMS="$root/assets/checksums.txt" \
+          OFFICIAL_BINARY="$(cat "$root/candidates")" \
+          PLUGIN_ASSET="$root/assets/$(jq -er '.plugin.assets.plugin.name' "$root/selection.json")" \
+          PROBE_ASSET="$root/assets/$(jq -er '.plugin.assets.probe.name' "$root/selection.json")" \
+          PLUGIN_METADATA="$root/assets/release-metadata.json" \
+          PLUGIN_CHECKSUMS="$root/assets/SHA256SUMS" \
+          PLUGIN_SOURCE_COMMIT="$(cat "$root/plugin-source-commit")" \
+          LOCKED_OUTPUT="$root/locked.json" \
+            go test -count=1 -run '^TestPromotionCommand$' ./deploy/tests
+      - name: Execute exact compatibility gate
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/promotion"
+          candidate=$(cat "$root/candidates")
+          probe="$root/assets/$(jq -er '.plugin.assets.probe.name' "$root/selection.json")"
+          cp "$root/assets/$(jq -er '.plugin.assets.plugin.name' "$root/selection.json")" "$root/assets/token-saver.so"
+          chmod +x "$candidate" "$probe"
+          mkdir "$root/home"
+          env -i HOME="$root/home" LANG=C.UTF-8 PATH="$PATH" TMPDIR="$root" NO_PROXY=127.0.0.1,::1 no_proxy=127.0.0.1,::1 \
+            "$probe" -candidate "$candidate" -plugin "$root/assets/token-saver.so" -timeout 45s > "$root/plugin-report.json"
+          env -i HOME="$root/home" LANG=C.UTF-8 PATH="$PATH" TMPDIR="$root" NO_PROXY=127.0.0.1,::1 no_proxy=127.0.0.1,::1 \
+            "$probe" -mode core-only -candidate "$candidate" -timeout 45s > "$root/core-report.json"
+          CLIPROXYAPI_CANDIDATE="$candidate" TOKEN_SAVER_PLUGIN="$root/assets/token-saver.so" \
+            go test -count=1 -run 'TestRealCandidate(Dispatch|CoreOnlyDispatch)$' ./test/compat
+      - name: Generate canonical approved manifest
+        id: result
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/promotion"
+          test "$GITHUB_REPOSITORY" = "$PLUGIN_REPOSITORY"
+          test "$GITHUB_REF" = "refs/heads/main"
+          PROMOTION_COMMAND=manifest \
+          LOCKED_INPUT="$root/locked.json" \
+          PLUGIN_REPORT="$root/plugin-report.json" \
+          CORE_REPORT="$root/core-report.json" \
+          PREVIOUS_INPUT="$root/previous.json" \
+          SOURCE_COMMIT="$GITHUB_SHA" \
+          MANIFEST_OUTPUT="$root/approved-release.json" \
+          CHANNEL_OUTPUT="$root/channel.json" \
+          RESULT_OUTPUT="$root/result.json" \
+            go test -count=1 -run '^TestPromotionCommand$' ./deploy/tests
+          echo "publish=$(jq -er '.publish' "$root/result.json")" >> "$GITHUB_OUTPUT"
+          echo "tag=$(jq -er '.tag' "$root/result.json")" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: approved-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/promotion/approved-release.json
+            ${{ runner.temp }}/promotion/channel.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: false
+
+  publish:
+    needs: compatibility
+    if: needs.compatibility.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: "1.26.5"
+          cache: true
+          cache-dependency-path: go.sum
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: approved-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist
+      - name: Validate final publication bytes
+        run: |
+          set -euo pipefail
+          PROMOTION_COMMAND=validate MANIFEST_INPUT=dist/approved-release.json \
+            go test -count=1 -run '^TestPromotionCommand$' ./deploy/tests
+      - name: Refuse conflicting duplicate
+        id: duplicate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVED_TAG: ${{ needs.compatibility.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$APPROVED_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release download "$APPROVED_TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern approved-release.json --dir "$RUNNER_TEMP/existing"
+            test "$(jq -er .fingerprint "$RUNNER_TEMP/existing/approved-release.json")" = \
+              "$(jq -er .fingerprint dist/approved-release.json)"
+            echo "create=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "create=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Attest approved control-plane artifacts
+        if: steps.duplicate.outputs.create == 'true'
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+        with:
+          subject-path: |
+            dist/approved-release.json
+            dist/channel.json
+      - name: Publish immutable approved release
+        if: steps.duplicate.outputs.create == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVED_TAG: ${{ needs.compatibility.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release create "$APPROVED_TAG" dist/approved-release.json dist/channel.json \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest=false \
+            --title "$APPROVED_TAG" \
+            --notes "Compatibility-approved CLIProxyAPI and Token Saver identity manifest."
