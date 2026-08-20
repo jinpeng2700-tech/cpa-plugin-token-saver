@@ -31,7 +31,6 @@ require_config_value() {
         { echo "unsafe next deployment config: $key must equal $value exactly once" >&2; exit 1; }
 }
 require_config_value host '127\.0\.0\.1'
-require_config_value disable-auto-update-panel true
 require_config_value rtk_enabled false
 require_config_value headroom_enabled false
 require_config_value caveman_enabled false

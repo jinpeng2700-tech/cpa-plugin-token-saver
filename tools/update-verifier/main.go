@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/router-for-me/cpa-plugin-token-saver/tools/update-verifier/verifier"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/tools/update-verifier/verifier"
 )
 
 func main() {
@@ -22,7 +22,6 @@ func run(args []string, input io.Reader, output io.Writer) int {
 	approvalPath := flags.String("approval", "", "root-owned approved-artifacts.json")
 	cliPath := flags.String("cli", "", "installed CLIProxyAPI binary")
 	pluginPath := flags.String("plugin", "", "installed Token Saver shared library")
-	panelPath := flags.String("panel", "", "installed management panel")
 	phaseValue := flags.String("phase", string(verifier.PhasePreflight), "preflight or postinstall")
 	credentialStdin := flags.Bool("credential-stdin", false, "read management credential from stdin")
 	if errParse := flags.Parse(args); errParse != nil || flags.NArg() != 0 {
@@ -50,7 +49,7 @@ func run(args []string, input io.Reader, output io.Writer) int {
 	defer cancel()
 	result := verifier.Verify(ctx, verifier.Options{
 		BaseURL: *baseURL, Credential: credential, Approval: approval, Phase: phase,
-		CLIPath: *cliPath, PluginPath: *pluginPath, PanelPath: *panelPath,
+		CLIPath: *cliPath, PluginPath: *pluginPath,
 	})
 	return writeResult(output, result)
 }

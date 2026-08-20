@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/router-for-me/cpa-plugin-token-saver/tools/update-verifier/verifier"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/tools/update-verifier/verifier"
 )
 
 func TestRebuildArtifactsExist(t *testing.T) {
@@ -88,7 +88,6 @@ func TestRebuildConfigAndNetworkContracts(t *testing.T) {
 		"port: 8317",
 		"dir: /root/cliproxyapi/plugins",
 		"allow-remote: true",
-		"disable-auto-update-panel: true",
 		"rtk_enabled: false",
 		"headroom_enabled: false",
 		"caveman_enabled: false",
@@ -161,7 +160,6 @@ func TestRebuildBundleRoundTripAndSecretRejection(t *testing.T) {
 	for name, body := range map[string]string{
 		"cli-proxy-api":         "\x7fELF\x00sk-false-positive-binary-string\n",
 		"token-saver-v1.0.1.so": "\x7fELF\x00fake plugin\n",
-		"management.html":       "<html>panel</html>\n",
 		"compat-probe":          "\x7fELF\x00fake probe\n",
 		"update-verifier":       "\x7fELF\x00fake verifier\n",
 	} {
@@ -178,9 +176,7 @@ func TestRebuildBundleRoundTripAndSecretRejection(t *testing.T) {
 		"--output-dir", output,
 		"--deployment-id", "test-7.2.136-1.0.1",
 		"--plugin-source-commit", "7be5a808",
-		"--panel-source-commit", "e11b5f29",
 		"--plugin-builder-digest", "sha256:" + strings.Repeat("1", 64),
-		"--panel-builder-digest", "sha256:" + strings.Repeat("2", 64),
 		"--glibc-max", "2.3.2",
 		"--write",
 	}
@@ -261,17 +257,68 @@ func TestRebuildBundleRoundTripAndSecretRejection(t *testing.T) {
 		}
 	}
 
-	if err := os.WriteFile(filepath.Join(input, "management.html"), []byte("api-key: sk-live-secret\n"), 0o600); err != nil {
-		t.Fatal(err)
+}
+
+func TestRebuildBundleOmitsDedicatedPanelArtifact(t *testing.T) {
+	python := "python3"
+	if runtime.GOOS == "windows" {
+		python = "python"
 	}
-	secretOutput := filepath.Join(t.TempDir(), "secret-bundle")
-	secretArgs := append([]string{}, args...)
-	for i := range secretArgs {
-		if secretArgs[i] == output {
-			secretArgs[i] = secretOutput
+	if _, err := exec.LookPath(python); err != nil {
+		t.Skipf("%s unavailable: %v", python, err)
+	}
+
+	input := t.TempDir()
+	for name, body := range map[string]string{
+		"cli-proxy-api":         "\x7fELF\x00fake CLI\n",
+		"token-saver-v1.0.1.so": "\x7fELF\x00fake plugin\n",
+		"compat-probe":          "\x7fELF\x00fake probe\n",
+		"update-verifier":       "\x7fELF\x00fake verifier\n",
+	} {
+		if err := os.WriteFile(filepath.Join(input, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if out, err := exec.Command(python, secretArgs...).CombinedOutput(); err == nil || !strings.Contains(string(out), "secret") {
-		t.Fatalf("secret-bearing input was not rejected: err=%v output=%s", err, out)
+
+	output := filepath.Join(t.TempDir(), "bundle")
+	root := repositoryRoot(t)
+	assemble := filepath.Join(root, "deploy", "rebuild", "assemble-bundle.py")
+	args := []string{
+		assemble,
+		"--input-dir", input,
+		"--output-dir", output,
+		"--deployment-id", "test-7.2.136-1.0.1",
+		"--plugin-source-commit", "7be5a808",
+		"--plugin-builder-digest", "sha256:" + strings.Repeat("1", 64),
+		"--glibc-max", "2.3.2",
+		"--write",
+	}
+	if out, err := exec.Command(python, args...).CombinedOutput(); err != nil {
+		t.Fatalf("assemble panel-free bundle: %v\n%s", err, out)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(output, "approved-artifacts.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		Panel json.RawMessage `json:"panel"`
+		Files []struct {
+			Path string `json:"path"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Panel != nil {
+		t.Fatalf("manifest retained panel identity: %s", manifest.Panel)
+	}
+	for _, file := range manifest.Files {
+		if file.Path == "static/management.html" {
+			t.Fatal("bundle retained management.html")
+		}
+	}
+	if _, err := os.Stat(filepath.Join(output, "static", "management.html")); !os.IsNotExist(err) {
+		t.Fatalf("management.html stat = %v, want absent", err)
 	}
 }

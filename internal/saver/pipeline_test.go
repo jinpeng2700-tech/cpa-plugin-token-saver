@@ -9,9 +9,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/router-for-me/cpa-plugin-token-saver/internal/config"
-	"github.com/router-for-me/cpa-plugin-token-saver/internal/headroom"
-	"github.com/router-for-me/cpa-plugin-token-saver/internal/prompt"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/config"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/headroom"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/prompt"
 )
 
 func TestPipelineRunsEnabledStagesInFixedOrder(t *testing.T) {

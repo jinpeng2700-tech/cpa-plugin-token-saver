@@ -9,12 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/router-for-me/cpa-plugin-token-saver/internal/config"
-	"github.com/router-for-me/cpa-plugin-token-saver/internal/headroom"
-	"github.com/router-for-me/cpa-plugin-token-saver/internal/metrics"
-	"github.com/router-for-me/cpa-plugin-token-saver/internal/prompt"
-	"github.com/router-for-me/cpa-plugin-token-saver/internal/protocol"
-	"github.com/router-for-me/cpa-plugin-token-saver/internal/rtk"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/config"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/headroom"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/metrics"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/prompt"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/protocol"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/rtk"
 	"github.com/tidwall/gjson"
 )
 

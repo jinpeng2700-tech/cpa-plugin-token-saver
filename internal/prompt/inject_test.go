@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/router-for-me/cpa-plugin-token-saver/internal/protocol"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/protocol"
 )
 
 const (

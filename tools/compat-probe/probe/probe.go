@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	pluginconfig "github.com/router-for-me/cpa-plugin-token-saver/internal/config"
+	pluginconfig "github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/config"
 	"gopkg.in/yaml.v3"
 )
 

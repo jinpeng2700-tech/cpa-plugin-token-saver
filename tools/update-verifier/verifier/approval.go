@@ -23,7 +23,6 @@ type approvalDocument struct {
 	Bundle             approvalBundle `json:"bundle"`
 	CLI                approvalCLI    `json:"cli"`
 	Plugin             approvalPlugin `json:"plugin"`
-	Panel              approvalPanel  `json:"panel"`
 	Files              []approvalFile `json:"files"`
 	ManifestExclusions []string       `json:"manifest_exclusions"`
 }
@@ -49,12 +48,6 @@ type approvalPlugin struct {
 	SourceCommit string `json:"source_commit"`
 	Builder      string `json:"builder_digest"`
 	GLIBCMax     string `json:"glibc_max"`
-	SHA256       string `json:"sha256"`
-}
-
-type approvalPanel struct {
-	SourceCommit string `json:"source_commit"`
-	Builder      string `json:"builder_digest"`
 	SHA256       string `json:"sha256"`
 }
 
@@ -104,10 +97,6 @@ func ParseApproval(raw []byte) (Approval, string) {
 			ABI:     document.Plugin.ABI,
 			RPC:     document.Plugin.RPCSchema,
 		},
-		Panel: ApprovedPanel{
-			Version: document.Panel.SourceCommit,
-			SHA256:  document.Panel.SHA256,
-		},
 	}, CodeOK
 }
 
@@ -125,9 +114,6 @@ func validApprovalDocument(document approvalDocument) bool {
 		!digestPattern.MatchString(document.Plugin.Builder) ||
 		!validGLIBCMax(document.Plugin.GLIBCMax) ||
 		!lowerSHA256Pattern.MatchString(document.Plugin.SHA256) ||
-		!lowerCommitPattern.MatchString(document.Panel.SourceCommit) ||
-		!digestPattern.MatchString(document.Panel.Builder) ||
-		!lowerSHA256Pattern.MatchString(document.Panel.SHA256) ||
 		document.Bundle.SourceCommit != document.Plugin.SourceCommit ||
 		document.Bundle.Builder != document.Plugin.Builder ||
 		len(document.Files) == 0 ||
@@ -139,7 +125,6 @@ func validApprovalDocument(document approvalDocument) bool {
 	required := map[string]string{
 		"cli-proxy-api": document.CLI.BinarySHA256,
 		"plugins/linux/amd64/token-saver-v1.0.1.so": document.Plugin.SHA256,
-		"static/management.html":                    document.Panel.SHA256,
 	}
 	previous := ""
 	seen := make(map[string]struct{}, len(document.Files))
@@ -205,9 +190,6 @@ func VerifyArtifacts(phase Phase, approval Approval, artifacts Artifacts) Result
 	}
 	if !hashEqual(artifacts.PluginHash, approval.Plugin.SHA256) {
 		return phaseFailure(phase, CodePluginHashMismatch)
-	}
-	if !hashEqual(artifacts.PanelHash, approval.Panel.SHA256) {
-		return phaseFailure(phase, CodePanelHashMismatch)
 	}
 	return compatible()
 }

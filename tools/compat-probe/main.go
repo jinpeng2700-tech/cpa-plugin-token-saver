@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/router-for-me/cpa-plugin-token-saver/tools/compat-probe/probe"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/tools/compat-probe/probe"
 )
 
 func main() {

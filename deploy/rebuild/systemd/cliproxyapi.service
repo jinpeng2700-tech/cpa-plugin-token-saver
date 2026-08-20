@@ -7,7 +7,6 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/root/cliproxyapi
 Environment=WRITABLE_PATH=/root/cliproxyapi/state
-Environment=MANAGEMENT_STATIC_PATH=/root/cliproxyapi/static/management.html
 ExecStart=/root/cliproxyapi/cli-proxy-api -config /root/cliproxyapi/state/config.yaml
 Restart=on-failure
 RestartSec=5s

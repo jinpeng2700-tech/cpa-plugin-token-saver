@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/router-for-me/cpa-plugin-token-saver/internal/config"
-	"github.com/router-for-me/cpa-plugin-token-saver/internal/headroom"
-	"github.com/router-for-me/cpa-plugin-token-saver/internal/metrics"
-	"github.com/router-for-me/cpa-plugin-token-saver/internal/saver"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/config"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/headroom"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/metrics"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/saver"
 )
 
 var selfTestBody = []byte(`{"messages":[{"role":"user","content":"Verify the local token saver pipeline."}]}`)

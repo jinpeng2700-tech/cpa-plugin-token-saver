@@ -25,7 +25,6 @@ cli_path=${CLIPROXYAPI_BINARY:-$app_dir/cli-proxy-api}
 version_file=${CLIPROXYAPI_VERSION_FILE:-$app_dir/version.txt}
 service_file=${CLIPROXYAPI_SERVICE_FILE:-$app_dir/cliproxyapi.service}
 plugin_path=${TOKEN_SAVER_PLUGIN_FILE-}
-panel_path=${MANAGEMENT_PANEL_FILE:-$app_dir/static/management.html}
 compat_probe=${COMPAT_PROBE_FILE:-$app_dir/compat-probe}
 verifier=${UPDATE_VERIFIER_FILE:-$app_dir/update-verifier}
 service_name=${CLIPROXYAPI_SERVICE_NAME:-cliproxyapi.service}
@@ -151,7 +150,6 @@ verifier_result() {
         -approval "$checked_approval" \
         -cli "$checked_cli" \
         -plugin "$plugin_path" \
-        -panel "$panel_path" \
         -phase "$phase" >"$output"
     verifier_rc=$?
     set -e
@@ -308,7 +306,6 @@ for named_path in \
     "cli_path:$cli_path" \
     "version_file:$version_file" \
     "service_file:$service_file" \
-    "panel_path:$panel_path" \
     "compat_probe:$compat_probe" \
     "verifier:$verifier" \
     "tmp_parent:$tmp_parent"
@@ -326,22 +323,20 @@ fi
 for executable in "$updater" "$compat_probe" "$verifier"; do
     trusted_file "$executable" && [ -x "$executable" ] || die "executable_untrusted=$executable"
 done
-trusted_file "$panel_path" || die "artifact_untrusted=$panel_path"
-
-approval_shape='type == "object" and (keys | sort) == ["cli","panel","plugin","schema_version","verifier_schema"] and (.cli | type == "object" and (keys | sort) == ["arch","sha256","version"]) and (.plugin | type == "object" and (keys | sort) == ["abi","rpc","sha256","version"]) and (.panel | type == "object" and (keys | sort) == ["sha256","version"])'
+approval_shape='type == "object" and (keys | sort) == ["cli","plugin","schema_version","verifier_schema"] and (.cli | type == "object" and (keys | sort) == ["arch","sha256","version"]) and (.plugin | type == "object" and (keys | sort) == ["abi","rpc","sha256","version"])'
 jq -e "$approval_shape" "$approval_file" >/dev/null 2>&1 || die "approval_invalid"
-approval_values=$(jq -er '[.schema_version,.verifier_schema,.cli.version,.cli.sha256,.cli.arch,.plugin.version,.plugin.sha256,.plugin.abi,.plugin.rpc,.panel.version,.panel.sha256] | @tsv' "$approval_file") || die "approval_invalid"
+approval_values=$(jq -er '[.schema_version,.verifier_schema,.cli.version,.cli.sha256,.cli.arch,.plugin.version,.plugin.sha256,.plugin.abi,.plugin.rpc] | @tsv' "$approval_file") || die "approval_invalid"
 old_ifs=$IFS
 IFS=$(printf '\t')
-read -r approval_schema verifier_schema cli_version cli_sha cli_arch plugin_version plugin_sha plugin_abi plugin_rpc panel_version panel_sha <<EOF
+read -r approval_schema verifier_schema cli_version cli_sha cli_arch plugin_version plugin_sha plugin_abi plugin_rpc <<EOF
 $approval_values
 EOF
 IFS=$old_ifs
 [ "$approval_schema" = 1 ] && [ "$verifier_schema" = 1 ] || die "approval_schema_mismatch"
-if ! valid_token "$cli_version" || ! valid_token "$plugin_version" || ! valid_token "$panel_version"; then
+if ! valid_token "$cli_version" || ! valid_token "$plugin_version"; then
     die "approval_version_invalid"
 fi
-if ! valid_sha256 "$cli_sha" || ! valid_sha256 "$plugin_sha" || ! valid_sha256 "$panel_sha"; then
+if ! valid_sha256 "$cli_sha" || ! valid_sha256 "$plugin_sha"; then
     die "approval_hash_invalid"
 fi
 [ "$plugin_abi" = 1 ] && [ "$plugin_rpc" = 3 ] || die "approval_plugin_contract_invalid"

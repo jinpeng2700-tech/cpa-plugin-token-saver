@@ -29,7 +29,6 @@ func readRepositoryFile(t *testing.T, name string) string {
 func TestDeploymentArtifactsExist(t *testing.T) {
 	for _, name := range []string{
 		"deploy/update-wrapper.sh",
-		"deploy/update-management-panel.sh",
 		"deploy/approved-artifacts.example.json",
 		"deploy/security-overrides.example.json",
 		"deploy/systemd/cliproxyapi-updater.service.d/credentials.conf",

@@ -35,26 +35,7 @@ Before any production stage is on, record evidence that:
 - `model_allowlist` is non-empty and contains only selected low-risk models;
 - the plugin host is enabled while RTK, Headroom, Caveman, and Ponytail are all off.
 
-## 3. Pin the panel fork
-
-In the CLIProxyAPI config, set the reviewed fork and stop built-in latest replacement:
-
-```yaml
-remote-management:
-  disable-auto-update-panel: true
-  panel-github-repository: "https://github.com/OWNER/REVIEWED-FORK"
-```
-
-Install only the root-approved exact release:
-
-```sh
-PANEL_RELEASE_REPOSITORY=OWNER/REVIEWED-FORK \
-  /root/cliproxyapi/update-management-panel.sh vAPPROVED_TAG
-```
-
-The installer backs up the current asset as its LKG, atomically replaces the file, and checks the SHA of the actual `/root/cliproxyapi/static/management.html`. Verify the CLI is configured to serve that same path. Panel rollback never changes the CLI or plugin.
-
-## 4. Integrate the wrapper without changing source or schedule
+## 3. Integrate the wrapper without changing source or schedule
 
 The actual service is the root user unit `cliproxyapi-update.service`; its timer is `/root/.config/systemd/user/cliproxyapi-update.timer`, scheduled daily at 00:00. Preserve that timer and the official GitHub release/checksum source.
 
@@ -68,7 +49,7 @@ It clears the existing `ExecStart`, changes it to `/root/cliproxyapi/update-wrap
 
 The wrapper resolves `latest` once, proves that exact approved tag, and passes the exact tag to the existing `/root/cliproxyapi/update.sh`. This prevents a later release from entering between probe and install.
 
-## 5. Required update rehearsals
+## 4. Required update rehearsals
 
 Perform these with sanitized fixtures and a sentinel management credential in an isolated maintenance window:
 
@@ -77,9 +58,9 @@ Perform these with sanitized fixtures and a sentinel management credential in an
 3. **Next-day bad fingerprint:** rerun unchanged inputs. Confirm no network fetch, candidate probe, or updater invocation occurs.
 4. **Security override:** use an exact root-approved security entry. Confirm the new CLI remains, the plugin moves to the root-only quarantine, restart succeeds, and `compat-probe -mode core-only` proves mock-provider inference with zero plugin markers. A failed core-only proof must keep the security CLI, keep the plugin isolated, disable the timer, and emit a high-priority manual-intervention alert.
 5. **Rollback failure:** break the restore or old-state verifier. Confirm `cliproxyapi-update.timer` is disabled, backups are preserved, and a priority-alert message is present.
-6. **Credential sentinel:** inspect wrapper/verifier `/proc/<pid>/cmdline`, `/proc/<pid>/environ`, journal, verifier reports, failure fingerprint, backups, and panel/DOM output. The sentinel value must occur nowhere. Only the verifier may receive `CREDENTIALS_DIRECTORY`; downloads, compat probes, updater, logger, and panel installer must not receive it.
+6. **Credential sentinel:** inspect wrapper/verifier `/proc/<pid>/cmdline`, `/proc/<pid>/environ`, journal, verifier reports, failure fingerprint, and backups. The sentinel value must occur nowhere. Only the verifier may receive `CREDENTIALS_DIRECTORY`; downloads, compat probes, updater, and logger must not receive it.
 
-## 6. Minimum pilot
+## 5. Minimum pilot
 
 Copy `testdata/pilot/pilot-report.example.json` and validate it against `pilot-report.schema.json`. Never paste a production prompt, request/response, API key, or management credential into the report.
 

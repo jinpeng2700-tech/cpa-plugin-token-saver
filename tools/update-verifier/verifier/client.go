@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	pluginconfig "github.com/router-for-me/cpa-plugin-token-saver/internal/config"
+	pluginconfig "github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/config"
 )
 
 const maxManagementBody = 1 << 20
@@ -63,12 +63,11 @@ func verify(ctx context.Context, options Options, architecture string, limits ti
 	}
 	cliHash, okCLI := hashFile(options.CLIPath)
 	pluginHash, okPlugin := hashFile(options.PluginPath)
-	panelHash, okPanel := hashFile(options.PanelPath)
-	if !okCLI || !okPlugin || !okPanel {
+	if !okCLI || !okPlugin {
 		return blocked(CodeArtifactRead)
 	}
 	if result := VerifyArtifacts(options.Phase, options.Approval, Artifacts{
-		Arch: architecture, CLIHash: cliHash, PluginHash: pluginHash, PanelHash: panelHash,
+		Arch: architecture, CLIHash: cliHash, PluginHash: pluginHash,
 	}); !result.Compatible {
 		return result
 	}

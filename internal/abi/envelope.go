@@ -8,9 +8,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/router-for-me/cpa-plugin-token-saver/internal/config"
-	"github.com/router-for-me/cpa-plugin-token-saver/internal/management"
-	"github.com/router-for-me/cpa-plugin-token-saver/internal/saver"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/config"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/management"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/saver"
 )
 
 const (
@@ -31,7 +31,7 @@ const (
 const (
 	PluginName       = "Token Saver"
 	PluginAuthor     = "Mr.King"
-	PluginRepository = "https://github.com/router-for-me/cpa-plugin-token-saver"
+	PluginRepository = "https://github.com/jinpeng2700-tech/cpa-plugin-token-saver"
 )
 
 // PluginVersion is a build identity seam. Release builds override it with

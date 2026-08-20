@@ -7,7 +7,6 @@ api-keys:
 remote-management:
   allow-remote: true
   secret-key: REPLACE_WITH_NEW_MANAGEMENT_KEY
-  disable-auto-update-panel: true
 
 plugins:
   enabled: true

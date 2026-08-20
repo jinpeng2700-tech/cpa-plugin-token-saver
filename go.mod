@@ -1,4 +1,4 @@
-module github.com/router-for-me/cpa-plugin-token-saver
+module github.com/jinpeng2700-tech/cpa-plugin-token-saver
 
 go 1.26.0
 

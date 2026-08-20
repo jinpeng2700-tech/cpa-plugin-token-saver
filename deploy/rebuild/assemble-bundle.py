@@ -18,7 +18,6 @@ PLUGIN_VERSION = "1.0.1"
 INPUTS = {
     "cli-proxy-api": "cli-proxy-api",
     "token-saver-v1.0.1.so": "plugins/linux/amd64/token-saver-v1.0.1.so",
-    "management.html": "static/management.html",
     "compat-probe": "tools/compat-probe",
     "update-verifier": "tools/update-verifier",
 }
@@ -109,11 +108,6 @@ def build(staging, args, script_dir, repo_root, validator):
             "glibc_max": args.glibc_max,
             "sha256": validator.sha256(staging / "plugins/linux/amd64/token-saver-v1.0.1.so"),
         },
-        "panel": {
-            "source_commit": args.panel_source_commit,
-            "builder_digest": args.panel_builder_digest,
-            "sha256": validator.sha256(staging / "static/management.html"),
-        },
         "files": files,
         "manifest_exclusions": ["approved-artifacts.json", "SHA256SUMS"],
     }
@@ -138,9 +132,7 @@ def main():
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--deployment-id", required=True)
     parser.add_argument("--plugin-source-commit", required=True)
-    parser.add_argument("--panel-source-commit", required=True)
     parser.add_argument("--plugin-builder-digest", required=True)
-    parser.add_argument("--panel-builder-digest", required=True)
     parser.add_argument("--glibc-max", required=True)
     parser.add_argument("--write", action="store_true", help="Write output; default validates in a disposable directory.")
     args = parser.parse_args()
@@ -148,9 +140,7 @@ def main():
     try:
         validate_argument(args.deployment_id, r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", "deployment id")
         validate_argument(args.plugin_source_commit, r"[0-9a-f]{7,40}", "plugin source commit")
-        validate_argument(args.panel_source_commit, r"[0-9a-f]{7,40}", "panel source commit")
         validate_argument(args.plugin_builder_digest, r"sha256:[0-9a-f]{64}", "plugin builder digest")
-        validate_argument(args.panel_builder_digest, r"sha256:[0-9a-f]{64}", "panel builder digest")
         validate_argument(args.glibc_max, r"[0-9]+(?:\.[0-9]+)+", "glibc max")
 
         output = pathlib.Path(args.output_dir).resolve()

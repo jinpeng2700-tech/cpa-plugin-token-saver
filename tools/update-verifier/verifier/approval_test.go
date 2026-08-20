@@ -20,16 +20,12 @@ func validApproval() Approval {
 			ABI:     1,
 			RPC:     3,
 		},
-		Panel: ApprovedPanel{
-			Version: "e11b5f29",
-			SHA256:  strings.Repeat("c", 64),
-		},
 	}
 }
 
 func TestParseApprovalRejectsMissingInvalidAndUnknownData(t *testing.T) {
 	valid := validApproval()
-	validJSON := `{"schema_version":2,"verifier_schema":1,"bundle":{"deployment_id":"test-7.2.136-1.0.1","source_commit":"7be5a808","builder_digest":"sha256:` + strings.Repeat("1", 64) + `"},"cli":{"tag":"v7.2.136","archive_sha256":"8f9160982bc2f26142f7b76a73fcc50f954c453470d5a6aefa81324ad18da288","binary_sha256":"` + valid.CLI.SHA256 + `","arch":"linux-amd64"},"plugin":{"id":"token-saver","version":"1.0.1","abi":1,"rpc_schema":3,"source_commit":"7be5a808","builder_digest":"sha256:` + strings.Repeat("1", 64) + `","glibc_max":"2.3.2","sha256":"` + valid.Plugin.SHA256 + `"},"panel":{"source_commit":"e11b5f29","builder_digest":"sha256:` + strings.Repeat("2", 64) + `","sha256":"` + valid.Panel.SHA256 + `"},"files":[{"path":"cli-proxy-api","sha256":"` + valid.CLI.SHA256 + `","mode":"0700"},{"path":"plugins/linux/amd64/token-saver-v1.0.1.so","sha256":"` + valid.Plugin.SHA256 + `","mode":"0700"},{"path":"static/management.html","sha256":"` + valid.Panel.SHA256 + `","mode":"0600"}],"manifest_exclusions":["approved-artifacts.json","SHA256SUMS"]}`
+	validJSON := `{"schema_version":2,"verifier_schema":1,"bundle":{"deployment_id":"test-7.2.136-1.0.1","source_commit":"7be5a808","builder_digest":"sha256:` + strings.Repeat("1", 64) + `"},"cli":{"tag":"v7.2.136","archive_sha256":"8f9160982bc2f26142f7b76a73fcc50f954c453470d5a6aefa81324ad18da288","binary_sha256":"` + valid.CLI.SHA256 + `","arch":"linux-amd64"},"plugin":{"id":"token-saver","version":"1.0.1","abi":1,"rpc_schema":3,"source_commit":"7be5a808","builder_digest":"sha256:` + strings.Repeat("1", 64) + `","glibc_max":"2.3.2","sha256":"` + valid.Plugin.SHA256 + `"},"files":[{"path":"cli-proxy-api","sha256":"` + valid.CLI.SHA256 + `","mode":"0700"},{"path":"plugins/linux/amd64/token-saver-v1.0.1.so","sha256":"` + valid.Plugin.SHA256 + `","mode":"0700"}],"manifest_exclusions":["approved-artifacts.json","SHA256SUMS"]}`
 
 	for _, tt := range []struct {
 		name string
@@ -60,7 +56,7 @@ func TestParseApprovalRejectsMissingInvalidAndUnknownData(t *testing.T) {
 
 func TestVerifyArtifactsClassifiesWrongHashAndArchitecture(t *testing.T) {
 	approval := validApproval()
-	valid := Artifacts{Arch: approval.CLI.Arch, CLIHash: approval.CLI.SHA256, PluginHash: approval.Plugin.SHA256, PanelHash: approval.Panel.SHA256}
+	valid := Artifacts{Arch: approval.CLI.Arch, CLIHash: approval.CLI.SHA256, PluginHash: approval.Plugin.SHA256}
 
 	for _, tt := range []struct {
 		name   string
@@ -70,7 +66,6 @@ func TestVerifyArtifactsClassifiesWrongHashAndArchitecture(t *testing.T) {
 		{name: "architecture", mutate: func(a *Artifacts) { a.Arch = "linux-arm64" }, code: CodeArchitectureMismatch},
 		{name: "CLI hash", mutate: func(a *Artifacts) { a.CLIHash = strings.Repeat("d", 64) }, code: CodeCLIHashMismatch},
 		{name: "plugin hash", mutate: func(a *Artifacts) { a.PluginHash = strings.Repeat("d", 64) }, code: CodePluginHashMismatch},
-		{name: "panel hash", mutate: func(a *Artifacts) { a.PanelHash = strings.Repeat("d", 64) }, code: CodePanelHashMismatch},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			artifacts := valid

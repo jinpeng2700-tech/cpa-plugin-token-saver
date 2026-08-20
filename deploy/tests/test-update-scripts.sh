@@ -3,20 +3,16 @@ set -eu
 
 repo_root=$(unset CDPATH; cd -- "$(dirname -- "$0")/../.." && pwd)
 wrapper=$repo_root/deploy/update-wrapper.sh
-panel_installer=$repo_root/deploy/update-management-panel.sh
 suite_root=$(mktemp -d "${TMPDIR:-/tmp}/token-saver-deploy-tests.XXXXXX")
 trap 'case "$suite_root" in */token-saver-deploy-tests.*) rm -rf -- "$suite_root" ;; esac' EXIT HUP INT TERM
 
 CLI_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 PLUGIN_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-PANEL_SHA=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ARCHIVE_SHA=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
 OLD_CLI_SHA=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 FINGERPRINT=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
-OLD_PANEL_SHA=1111111111111111111111111111111111111111111111111111111111111111
-TAMPERED_SHA=9999999999999999999999999999999999999999999999999999999999999999
 SENTINEL=sentinel-management-key-never-log
-export CLI_SHA PLUGIN_SHA PANEL_SHA ARCHIVE_SHA OLD_CLI_SHA FINGERPRINT OLD_PANEL_SHA TAMPERED_SHA SENTINEL
+export CLI_SHA PLUGIN_SHA ARCHIVE_SHA OLD_CLI_SHA FINGERPRINT SENTINEL
 
 failures=0
 
@@ -65,7 +61,7 @@ last=
 for value do last=$value; done
 case "$all" in
     *'@tsv'*)
-        printf '1\t1\t1.2.3\t%s\tlinux-amd64\t0.1.0\t%s\t1\t3\tv0.1.0\t%s\n' "$CLI_SHA" "$PLUGIN_SHA" "$PANEL_SHA"
+        printf '1\t1\t1.2.3\t%s\tlinux-amd64\t0.1.0\t%s\t1\t3\n' "$CLI_SHA" "$PLUGIN_SHA"
         ;;
     *'all(.overrides[]'*) exit 0 ;;
     *'[.overrides[]'*)
@@ -73,8 +69,6 @@ case "$all" in
         printf 'CVE-test-approved\n'
         ;;
     *'.tag_name'*) printf 'v1.2.3\n' ;;
-    *'.panel.version'*) printf 'v0.1.0\n' ;;
-    *'.panel.sha256'*) printf '%s\n' "$PANEL_SHA" ;;
     *'.code | select'*)
         sed -n 's/.*"code":"\([^"]*\)".*/\1/p' "$last"
         ;;
@@ -102,9 +96,6 @@ case "$url" in
     */releases/latest|*/releases/tags/*) printf '{"tag_name":"v1.2.3"}\n' >"$output" ;;
     */checksums.txt) printf '%s  CLIProxyAPI_1.2.3_linux_amd64.tar.gz\n' "$ARCHIVE_SHA" >"$output" ;;
     */CLIProxyAPI_1.2.3_linux_amd64.tar.gz) printf 'archive\n' >"$output" ;;
-    */management.html)
-        if [ "${FAKE_PANEL_TAMPER:-0}" = 1 ]; then printf 'panel-tampered\n' >"$output"; else printf 'panel-new\n' >"$output"; fi
-        ;;
     *) exit 1 ;;
 esac
 EOF
@@ -121,9 +112,6 @@ case "$content" in
     archive) hash=$ARCHIVE_SHA ;;
     candidate-cli) hash=$CLI_SHA ;;
     old-cli) hash=$OLD_CLI_SHA ;;
-    panel-new) hash=$PANEL_SHA ;;
-    panel-old) hash=$OLD_PANEL_SHA ;;
-    panel-tampered) hash=$TAMPERED_SHA ;;
     *) hash=$TAMPERED_SHA ;;
 esac
 printf '%s  %s\n' "$hash" "$1"
@@ -174,7 +162,6 @@ make_case() {
     printf '1.0.0\n' >"$app/version.txt"
     printf 'old-service\n' >"$app/cliproxyapi.service"
     printf 'plugin\n' >"$app/token-saver.so"
-    printf 'panel-old\n' >"$app/static/management.html"
     printf '{}\n' >"$app/approved-artifacts.json"
     printf '%s\n' "$SENTINEL" >"$root/credentials/cliproxyapi-management-key"
     cat >"$app/config.yaml" <<'EOF'
@@ -284,7 +271,6 @@ run_wrapper() {
         export CLIPROXYAPI_VERSION_FILE=$root/app/version.txt
         export CLIPROXYAPI_SERVICE_FILE=$root/app/cliproxyapi.service
         export TOKEN_SAVER_PLUGIN_FILE=$root/app/token-saver.so
-        export MANAGEMENT_PANEL_FILE=$root/app/static/management.html
         export COMPAT_PROBE_FILE=$root/app/compat-probe
         export UPDATE_VERIFIER_FILE=$root/app/update-verifier
         export CREDENTIALS_DIRECTORY=$root/credentials
@@ -406,43 +392,6 @@ test_backup_discovery_requires_one_new_directory() {
     assert_contains "$root/events" 'rollback_backup_discovery_failed' 'ambiguous backup alert'
 }
 
-run_panel() {
-    root=$1
-    tag=$2
-    set +e
-    (
-        export TEST_ROOT=$root
-        export PATH=$root/bin:$PATH
-        export TMPDIR=$root/tmp
-        export CLIPROXYAPI_HOME=$root/app
-        export APPROVED_ARTIFACTS_FILE=$root/app/approved-artifacts.json
-        export CLIPROXYAPI_CONFIG_FILE=$root/app/config.yaml
-        export MANAGEMENT_PANEL_FILE=$root/app/static/management.html
-        export PANEL_UPDATE_STATE_DIR=$root/app/.panel-update
-        export PANEL_RELEASE_REPOSITORY=example/panel-fork
-        export CREDENTIALS_DIRECTORY=$root/credentials
-        sh "$panel_installer" "$tag"
-    ) >"$root/panel-stdout" 2>"$root/panel-stderr"
-    PANEL_RC=$?
-    set -e
-}
-
-test_panel_install_and_tamper_rejection() {
-    root=$(make_case panel-normal)
-    run_panel "$root" v0.1.0
-    assert_eq "$PANEL_RC" 0 'panel normal exit'
-    assert_eq "$(tr -d '\r\n' <"$root/app/static/management.html")" panel-new 'panel atomic install'
-    [ -f "$root/app/.panel-update/management.html.lkg" ] || fail 'panel LKG missing'
-    assert_absent "$root/credential-leaks" 'panel inherited credential directory'
-
-    root=$(make_case panel-tamper)
-    export FAKE_PANEL_TAMPER=1
-    run_panel "$root" v0.1.0
-    unset FAKE_PANEL_TAMPER
-    assert_eq "$PANEL_RC" 3 'panel tamper exit'
-    assert_eq "$(tr -d '\r\n' <"$root/app/static/management.html")" panel-old 'panel tamper preserved installed panel'
-}
-
 test_systemd_239_refusal
 test_normal_update_and_credential_boundary
 test_preflight_blocked_not_fingerprinted
@@ -452,7 +401,6 @@ test_candidate_failure_rolls_back
 test_security_override_keeps_cli_and_isolates_plugin
 test_rollback_failure_disables_timer
 test_backup_discovery_requires_one_new_directory
-test_panel_install_and_tamper_rejection
 
 if [ "$failures" -ne 0 ]; then
     exit 1

@@ -32,7 +32,6 @@ const (
 	CodeArchitectureMismatch  = "architecture_mismatch"
 	CodeCLIHashMismatch       = "cli_hash_mismatch"
 	CodePluginHashMismatch    = "plugin_hash_mismatch"
-	CodePanelHashMismatch     = "panel_hash_mismatch"
 	CodeCoreUnavailable       = "core_unavailable"
 	CodeManagementAuth        = "management_auth_failed"
 	CodeManagementUnavailable = "management_unavailable"
@@ -66,7 +65,6 @@ type Approval struct {
 	VerifierSchema int            `json:"verifier_schema"`
 	CLI            ApprovedCLI    `json:"cli"`
 	Plugin         ApprovedPlugin `json:"plugin"`
-	Panel          ApprovedPanel  `json:"panel"`
 }
 
 type ApprovedCLI struct {
@@ -82,16 +80,10 @@ type ApprovedPlugin struct {
 	RPC     uint32 `json:"rpc"`
 }
 
-type ApprovedPanel struct {
-	Version string `json:"version"`
-	SHA256  string `json:"sha256"`
-}
-
 type Artifacts struct {
 	Arch       string
 	CLIHash    string
 	PluginHash string
-	PanelHash  string
 }
 
 type PluginState struct {
@@ -136,7 +128,6 @@ type Options struct {
 	Phase      Phase
 	CLIPath    string
 	PluginPath string
-	PanelPath  string
 }
 
 func compatible() Result {

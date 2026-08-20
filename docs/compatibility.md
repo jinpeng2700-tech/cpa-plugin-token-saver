@@ -25,7 +25,7 @@ The failed fingerprint is SHA-256 over the approved CLI version, CLI binary SHA-
 
 ## Credential boundary
 
-The only supported path is systemd `LoadCredential=cliproxyapi-management-key:/absolute/root-only/source`. systemd supplies `CREDENTIALS_DIRECTORY` to the wrapper; the wrapper immediately unexports it and gives it only to the Go verifier. The wrapper never opens the credential, never calls the Management API with `curl`, and never forwards the credential directory to downloads, the compatibility probe, the official updater, logging commands, or the panel installer.
+The only supported path is systemd `LoadCredential=cliproxyapi-management-key:/absolute/root-only/source`. systemd supplies `CREDENTIALS_DIRECTORY` to the wrapper; the wrapper immediately unexports it and gives it only to the Go verifier. The wrapper never opens the credential, never calls the Management API with `curl`, and never forwards the credential directory to downloads, the compatibility probe, the official updater, or logging commands.
 
 The source credential must be a root-owned regular file with mode `0600`. The approval, optional security override, and failed-fingerprint files must be root-owned regular files and must not be group- or other-writable. The official systemd credential documentation is [systemd.exec — Credentials](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#Credentials).
 
@@ -43,17 +43,6 @@ The wrapper is a gate around the existing official updater; it does not replace 
 Missing, untrusted, or multiple new backup directories are rollback-safety failures: the timer is disabled and a priority-alert message is emitted.
 
 For a root-approved security override that exactly matches CLI version/SHA/architecture and has a non-empty reason, only a plugin-compatibility failure is eligible. The new security CLI is retained, Token Saver is moved to the root-only quarantine, the service is restarted, and `compat-probe -mode core-only` must prove raw core inference through a local mock with plugins disabled. If that proof fails, the security CLI remains installed, the plugin remains isolated, the timer is disabled, and manual intervention is required. The wrapper never rolls a security-approved CLI back merely to preserve plugin compatibility.
-
-## Independent panel compatibility
-
-The panel installer is independent of `LoadCredential` and systemd version. It requires:
-
-- an exact panel tag and SHA in `approved-artifacts.json`;
-- `remote-management.disable-auto-update-panel: true` before download;
-- `panel-github-repository` equal to the explicitly selected fork;
-- a root-owned current panel, last-known-good backup, atomic same-directory replacement, and verification of the actual served `management.html` file hash.
-
-The installer does not read the management credential or call the Management API. A download/hash failure leaves the installed panel untouched; a post-install hash failure restores and verifies the LKG.
 
 ## External dependency blockers
 

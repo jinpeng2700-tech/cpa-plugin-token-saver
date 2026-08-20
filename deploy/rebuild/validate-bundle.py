@@ -72,8 +72,6 @@ def scan_secrets(path, relative):
     for marker in SECRET_MARKERS:
         if marker.search(raw):
             fail(f"secret content rejected: {normalized}")
-    if normalized == "static/management.html":
-        return
     for assignment in (SENSITIVE_ASSIGNMENT, JSON_SENSITIVE_ASSIGNMENT):
         for match in assignment.finditer(raw):
             value = match.group(2).upper()
@@ -96,7 +94,7 @@ def require_keys(value, expected, name):
 def validate_identity(manifest):
     require_keys(
         manifest,
-        {"schema_version", "verifier_schema", "bundle", "cli", "plugin", "panel", "files", "manifest_exclusions"},
+        {"schema_version", "verifier_schema", "bundle", "cli", "plugin", "files", "manifest_exclusions"},
         "manifest",
     )
     if manifest.get("schema_version") != 2:
@@ -146,15 +144,6 @@ def validate_identity(manifest):
         raise ValueError("invalid plugin glibc_max") from error
     if len(glibc) < 2 or glibc > (2, 32):
         fail("plugin glibc_max exceeds 2.32")
-
-    panel = require_object(manifest, "panel")
-    require_keys(panel, {"source_commit", "builder_digest", "sha256"}, "panel")
-    if (
-        not COMMIT.fullmatch(str(panel.get("source_commit", "")))
-        or not DIGEST.fullmatch(str(panel.get("builder_digest", "")))
-        or not HEX64.fullmatch(str(panel.get("sha256", "")))
-    ):
-        fail("invalid panel identity")
 
 
 def validate_bundle(root):
@@ -213,7 +202,6 @@ def validate_bundle(root):
     for relative, digest in {
         "cli-proxy-api": manifest["cli"]["binary_sha256"],
         "plugins/linux/amd64/token-saver-v1.0.1.so": manifest["plugin"]["sha256"],
-        "static/management.html": manifest["panel"]["sha256"],
     }.items():
         if listed_hashes.get(relative) != digest:
             fail(f"identity hash mismatch: {relative}")

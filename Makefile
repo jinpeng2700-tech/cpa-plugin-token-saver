@@ -8,7 +8,7 @@ override VERSION := 1.0.1
 override GOOS := linux
 override GOARCH := amd64
 
-PLUGIN_PACKAGE := github.com/router-for-me/cpa-plugin-token-saver/internal/abi
+PLUGIN_PACKAGE := github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/abi
 PLUGIN_OUT := $(DIST_DIR)/token-saver-v$(VERSION)-linux-$(GOARCH).so
 COMPAT_PROBE_OUT := $(DIST_DIR)/compat-probe-v$(VERSION)-linux-$(GOARCH)
 UPDATE_VERIFIER_OUT := $(DIST_DIR)/update-verifier-v$(VERSION)-linux-$(GOARCH)

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	pluginconfig "github.com/router-for-me/cpa-plugin-token-saver/internal/config"
+	pluginconfig "github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/config"
 )
 
 func TestVerifyUsesInProcessAuthorizationAndChecksStableRuntime(t *testing.T) {
@@ -112,9 +112,8 @@ func verifierFixture(t *testing.T) (Approval, Options) {
 	paths := []string{
 		filepath.Join(directory, "cli-proxy-api"),
 		filepath.Join(directory, "token-saver.so"),
-		filepath.Join(directory, "management.html"),
 	}
-	contents := [][]byte{[]byte("cli"), []byte("plugin"), []byte("panel")}
+	contents := [][]byte{[]byte("cli"), []byte("plugin")}
 	for index := range paths {
 		if errWrite := os.WriteFile(paths[index], contents[index], 0o600); errWrite != nil {
 			t.Fatal(errWrite)
@@ -123,9 +122,8 @@ func verifierFixture(t *testing.T) (Approval, Options) {
 	approval := validApproval()
 	approval.CLI.SHA256, _ = hashFile(paths[0])
 	approval.Plugin.SHA256, _ = hashFile(paths[1])
-	approval.Panel.SHA256, _ = hashFile(paths[2])
 	return approval, Options{
-		Phase: PhasePostInstall, CLIPath: paths[0], PluginPath: paths[1], PanelPath: paths[2],
+		Phase: PhasePostInstall, CLIPath: paths[0], PluginPath: paths[1],
 		Approval: approval,
 	}
 }

@@ -14,7 +14,7 @@ REBUILD = ROOT / "deploy" / "rebuild"
 
 
 class RebuildDeliveryTest(unittest.TestCase):
-    def test_generic_secret_assignment_still_rejected_outside_built_panel(self):
+    def test_generic_secret_assignment_is_rejected(self):
         spec = importlib.util.spec_from_file_location("rebuild_validator", REBUILD / "validate-bundle.py")
         validator = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(validator)
@@ -45,7 +45,6 @@ class RebuildDeliveryTest(unittest.TestCase):
         for expected in [
             "host: 127.0.0.1",
             "dir: /root/cliproxyapi/plugins",
-            "disable-auto-update-panel: true",
             "rtk_enabled: false",
             "headroom_enabled: false",
             "caveman_enabled: false",
@@ -72,7 +71,7 @@ class RebuildDeliveryTest(unittest.TestCase):
             self.assertIn(expected, nft)
 
         service = (REBUILD / "systemd/cliproxyapi.service").read_text()
-        for expected in ["WRITABLE_PATH", "MANAGEMENT_STATIC_PATH", "UMask=0077", "/root/cliproxyapi/state/config.yaml"]:
+        for expected in ["WRITABLE_PATH", "UMask=0077", "/root/cliproxyapi/state/config.yaml"]:
             self.assertIn(expected, service)
 
         firewall_service = (REBUILD / "firewall/cpa-network-guard.service").read_text()
@@ -109,10 +108,10 @@ class RebuildDeliveryTest(unittest.TestCase):
         self.assertIn("model_allowlist must contain an exact model id", (REBUILD / "activate-release.sh").read_text())
         self.assertIn("legacy-artifacts.json", (REBUILD / "rollback-release.sh").read_text())
 
-        bash = shutil.which("bash")
-        if bash:
+        shell = "sh"
+        if pathlib.Path("/bin/sh").is_file() or sys.platform == "win32":
             subprocess.run(
-                [bash, "-n", *(f"deploy/rebuild/{name}" for name in [
+                [shell, "-n", *(f"deploy/rebuild/{name}" for name in [
                     "stage-release.sh", "activate-release.sh", "rollback-release.sh"
                 ])],
                 check=True,
@@ -127,7 +126,6 @@ class RebuildDeliveryTest(unittest.TestCase):
             for name, content in {
                 "cli-proxy-api": b"\x7fELF\x00sk-false-positive-binary-string\n",
                 "token-saver-v1.0.1.so": b"\x7fELF\x00fake plugin\n",
-                "management.html": b"<html>panel</html>\n",
                 "compat-probe": b"\x7fELF\x00fake probe\n",
                 "update-verifier": b"\x7fELF\x00fake verifier\n",
             }.items():
@@ -145,12 +143,8 @@ class RebuildDeliveryTest(unittest.TestCase):
                 "test-7.2.136-1.0.1",
                 "--plugin-source-commit",
                 "7be5a808",
-                "--panel-source-commit",
-                "e11b5f29",
                 "--plugin-builder-digest",
                 "sha256:" + "1" * 64,
-                "--panel-builder-digest",
-                "sha256:" + "2" * 64,
                 "--glibc-max",
                 "2.3.2",
                 "--write",
@@ -243,19 +237,6 @@ class RebuildDeliveryTest(unittest.TestCase):
             self.assertNotEqual(0, rejected.returncode)
             self.assertIn("identity hash mismatch", (rejected.stdout + rejected.stderr).lower())
 
-            (inputs / "management.html").write_text("api-key: sk-live-secret\n")
-            secret_output = temporary / "secret-bundle"
-            secret_command = [str(secret_output) if value == str(output) else value for value in command]
-            rejected = subprocess.run(secret_command, capture_output=True, text=True)
-            self.assertNotEqual(0, rejected.returncode)
-            self.assertIn("secret", (rejected.stdout + rejected.stderr).lower())
-
-            (inputs / "management.html").write_text('{"client_secret":"sk-live-secret"}\n')
-            json_secret_output = temporary / "json-secret-bundle"
-            json_secret_command = [str(json_secret_output) if value == str(output) else value for value in command]
-            rejected = subprocess.run(json_secret_command, capture_output=True, text=True)
-            self.assertNotEqual(0, rejected.returncode)
-            self.assertIn("secret", (rejected.stdout + rejected.stderr).lower())
 
 
 if __name__ == "__main__":

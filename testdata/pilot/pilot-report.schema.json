@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/router-for-me/cpa-plugin-token-saver/testdata/pilot/pilot-report.schema.json",
+  "$id": "https://github.com/jinpeng2700-tech/cpa-plugin-token-saver/testdata/pilot/pilot-report.schema.json",
   "title": "CLIProxyAPI Token Saver minimum pilot report",
   "type": "object",
   "additionalProperties": false,
