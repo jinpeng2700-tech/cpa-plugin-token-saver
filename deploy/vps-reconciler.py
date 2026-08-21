@@ -7,6 +7,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 TAG_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+DEFAULT_APPROVED_REPOSITORY = "jinpeng2700-tech/cpa-plugin-token-saver"
 
 SECRET_PATTERNS = [
     (re.compile(r"https?://([^:]+):([^@]+)@", re.IGNORECASE), r"https://\1:***@"),
@@ -22,6 +24,37 @@ def sanitize_log(message: str) -> str:
 
 def log(msg: str) -> None:
     print(f"[reconciler] {sanitize_log(msg)}", file=sys.stderr)
+
+def read_json_url(url: str) -> Any:
+    req = urllib.request.Request(url, headers={"User-Agent": "cliproxyapi-updater/1.0"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+def discover_latest_approved_manifest(repository: str, json_loader: Callable[[str], Any] = read_json_url) -> Dict[str, Any]:
+    if not REPOSITORY_PATTERN.fullmatch(repository):
+        raise ValueError(f"Invalid approved repository: {repository}")
+    releases = json_loader(f"https://api.github.com/repos/{repository}/releases?per_page=100")
+    if not isinstance(releases, list):
+        raise ValueError("GitHub releases response must be an array")
+    candidates = []
+    for release in releases:
+        if not isinstance(release, dict) or release.get("draft") or release.get("prerelease"):
+            continue
+        if not str(release.get("tag_name", "")).startswith("approved-cli-"):
+            continue
+        for asset in release.get("assets", []):
+            if isinstance(asset, dict) and asset.get("name") == "approved-release.json":
+                manifest = json_loader(str(asset.get("browser_download_url", "")))
+                generation = manifest.get("channel_generation") if isinstance(manifest, dict) else None
+                if manifest.get("schema_version") == 2 and isinstance(generation, int) and not isinstance(generation, bool) and generation > 0:
+                    candidates.append((generation, manifest))
+                break
+    if not candidates:
+        raise ValueError("No valid approved schema v2 release found")
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    if len(candidates) > 1 and candidates[0][0] == candidates[1][0] and candidates[0][1].get("fingerprint") != candidates[1][1].get("fingerprint"):
+        raise ValueError(f"Conflicting approved releases at channel_generation {candidates[0][0]}")
+    return candidates[0][1]
 
 def sha256_file(path: pathlib.Path) -> str:
     h = hashlib.sha256()
@@ -149,13 +182,14 @@ class Reconciler:
         target = self.active_link.resolve()
         if not target.exists() or not target.is_dir():
             return None
-        manifest_file = target / "approved-manifest.json"
-        if not manifest_file.is_file():
-            return None
-        try:
-            return json.loads(manifest_file.read_text(encoding="utf-8"))
-        except Exception:
-            return None
+        for name in ("approved-manifest.json", "approved-release.json"):
+            manifest_file = target / name
+            if manifest_file.is_file():
+                try:
+                    return json.loads(manifest_file.read_text(encoding="utf-8"))
+                except Exception:
+                    return None
+        return None
 
     def validate_manifest(self, manifest: Dict[str, Any]) -> None:
         schema_version = manifest.get("schema_version")
@@ -163,6 +197,9 @@ class Reconciler:
             raise ValueError(f"Unsupported target manifest schema_version: {schema_version}; target requires schema v2")
         if manifest.get("verifier_schema") != 1:
             raise ValueError("Unsupported verifier_schema")
+        generation = manifest.get("channel_generation")
+        if not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
+            raise ValueError("Invalid channel_generation")
 
         panel = manifest.get("panel")
         if not isinstance(panel, dict):
@@ -247,6 +284,14 @@ class Reconciler:
         if current_fingerprint and current_fingerprint == target_fingerprint:
             log(f"Deployment is already up-to-date with fingerprint {target_fingerprint}")
             return {"success": True, "action": "noop", "fingerprint": target_fingerprint}
+        if current_manifest:
+            current_generation = current_manifest.get("channel_generation")
+            target_generation = manifest.get("channel_generation")
+            if isinstance(current_generation, int) and not isinstance(current_generation, bool):
+                if target_generation < current_generation:
+                    raise ValueError(f"Refusing channel generation downgrade: current {current_generation}, target {target_generation}")
+                if target_generation == current_generation:
+                    raise ValueError(f"Conflicting fingerprints at channel_generation {target_generation}")
 
         official = manifest["official"]
         plugin = manifest["plugin"]
@@ -368,7 +413,8 @@ class Reconciler:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Reconcile CLIProxyAPI approved release")
-    parser.add_argument("--manifest", help="Path or URL to approved-release.json", default="/root/cliproxyapi/channel.json")
+    parser.add_argument("--manifest", help="Path or URL to approved-release.json; omitted discovers highest approved generation", default=os.environ.get("APPROVED_MANIFEST", ""))
+    parser.add_argument("--repository", default=os.environ.get("APPROVED_REPOSITORY", DEFAULT_APPROVED_REPOSITORY))
     parser.add_argument("--deploy-root", default=os.environ.get("DEPLOY_ROOT", "/root/cliproxyapi.deployments"))
     parser.add_argument("--active-link", default=os.environ.get("ACTIVE_LINK", "/root/cliproxyapi"))
     parser.add_argument("--prev-link", default=os.environ.get("PREV_LINK", "/root/cliproxyapi.prev"))
@@ -376,10 +422,10 @@ def main() -> None:
     args = parser.parse_args()
 
     manifest_source = args.manifest
-    if manifest_source.startswith("http://") or manifest_source.startswith("https://"):
-        req = urllib.request.Request(manifest_source, headers={"User-Agent": "cliproxyapi-updater/1.0"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            manifest_data = json.loads(resp.read().decode("utf-8"))
+    if not manifest_source:
+        manifest_data = discover_latest_approved_manifest(args.repository)
+    elif manifest_source.startswith("http://") or manifest_source.startswith("https://"):
+        manifest_data = read_json_url(manifest_source)
     else:
         manifest_data = json.loads(pathlib.Path(manifest_source).read_text(encoding="utf-8"))
 

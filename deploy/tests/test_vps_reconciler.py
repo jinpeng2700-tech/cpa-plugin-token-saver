@@ -129,6 +129,7 @@ class TestVPSReconciler(unittest.TestCase):
         (dep_dir / "management.html").write_bytes(self.panel_bytes)
         (dep_dir / "version.txt").write_text("7.2.136\n")
         manifest = dict(self.manifest_v2_data)
+        manifest["channel_generation"] = 3
         manifest["fingerprint"] = "sha256:" + "0" * 64
         if schema_version == 1:
             manifest["schema_version"] = 1
@@ -174,6 +175,47 @@ class TestVPSReconciler(unittest.TestCase):
         self.assertEqual(cli_file.read_bytes(), self.cli_binary_bytes)
         prev_target = self.prev_link.resolve()
         self.assertEqual(prev_target.name, "dep-initial")
+    def test_discovers_highest_approved_channel_generation(self):
+        lower = json.loads(json.dumps(self.manifest_v2_data))
+        lower["channel_generation"] = 4
+        lower["fingerprint"] = "sha256:" + "4" * 64
+        higher = json.loads(json.dumps(self.manifest_v2_data))
+        higher["channel_generation"] = 5
+        higher["fingerprint"] = "sha256:" + "5" * 64
+        api_url = "https://api.github.com/repos/owner/repo/releases?per_page=100"
+        lower_url = "https://example.invalid/g4/approved-release.json"
+        higher_url = "https://example.invalid/g5/approved-release.json"
+        responses = {
+            api_url: [
+                {"tag_name": "approved-cli-g4", "draft": False, "prerelease": False, "assets": [{"name": "approved-release.json", "browser_download_url": lower_url}]},
+                {"tag_name": "unapproved-release", "draft": False, "prerelease": False, "assets": [{"name": "approved-release.json", "browser_download_url": "https://example.invalid/unapproved.json"}]},
+                {"tag_name": "approved-cli-g5", "draft": False, "prerelease": False, "assets": [{"name": "approved-release.json", "browser_download_url": higher_url}]},
+            ],
+            lower_url: lower,
+            higher_url: higher,
+        }
+
+        selected = self.reconciler.discover_latest_approved_manifest("owner/repo", responses.__getitem__)
+
+        self.assertEqual(selected["channel_generation"], 5)
+        self.assertEqual(selected["fingerprint"], higher["fingerprint"])
+    def test_inspect_current_deployment_accepts_legacy_manifest_filename(self):
+        dep_dir = self.create_initial_deployment("dep-initial")
+        (dep_dir / "approved-manifest.json").replace(dep_dir / "approved-release.json")
+        reconciler = self.reconciler.Reconciler(
+            deploy_root=self.deploy_root,
+            active_link=self.active_link,
+            prev_link=self.prev_link,
+            state_dir=self.state_dir,
+            downloader=MockDownloader({}),
+            service_runner=MockServiceRunner(),
+            lock_provider=MockLockProvider(),
+        )
+
+        current = reconciler.inspect_current_deployment()
+
+        self.assertIsNotNone(current)
+        self.assertEqual(current["channel_generation"], 3)
     def test_panel_sha_mismatch_leaves_active_unchanged(self):
         initial_dir = self.create_initial_deployment("dep-initial")
         urls = {
@@ -457,6 +499,32 @@ class TestVPSReconciler(unittest.TestCase):
         self.assertEqual(self.active_link.resolve(), initial_dir.resolve())
         self.assertEqual(len(downloader.download_log), 0)
 
+
+    def test_generation_downgrade_is_rejected_before_download(self):
+        initial_dir = self.create_initial_deployment("dep-current")
+        current = json.loads((initial_dir / "approved-manifest.json").read_text())
+        current["channel_generation"] = 5
+        current["fingerprint"] = "sha256:" + "5" * 64
+        (initial_dir / "approved-manifest.json").write_text(json.dumps(current))
+        target = json.loads(json.dumps(self.manifest_v2_data))
+        target["channel_generation"] = 4
+        target["fingerprint"] = "sha256:" + "4" * 64
+        downloader = MockDownloader({})
+        reconciler = self.reconciler.Reconciler(
+            deploy_root=self.deploy_root,
+            active_link=self.active_link,
+            prev_link=self.prev_link,
+            state_dir=self.state_dir,
+            downloader=downloader,
+            service_runner=MockServiceRunner(),
+            lock_provider=MockLockProvider(),
+        )
+
+        with self.assertRaisesRegex(ValueError, "downgrade"):
+            reconciler.reconcile(target)
+
+        self.assertEqual(self.active_link.resolve(), initial_dir.resolve())
+        self.assertEqual(downloader.download_log, [])
 
     def test_concurrency_lock_blocks_concurrent_instance_and_releases(self):
         initial_dir = self.create_initial_deployment('dep-initial')
