@@ -69,3 +69,19 @@ func TestRegistryRecordsAllBypassedUnderOneProjection(t *testing.T) {
 		}
 	}
 }
+
+func TestStageSnapshotSavedBytesNeverUnderflows(t *testing.T) {
+	tests := []struct {
+		input, output, want uint64
+	}{
+		{100, 40, 60},
+		{40, 40, 0},
+		{40, 100, 0},
+	}
+	for _, test := range tests {
+		got := (StageSnapshot{InputBytes: test.input, OutputBytes: test.output}).SavedBytes()
+		if got != test.want {
+			t.Fatalf("SavedBytes(%d,%d) = %d, want %d", test.input, test.output, got, test.want)
+		}
+	}
+}

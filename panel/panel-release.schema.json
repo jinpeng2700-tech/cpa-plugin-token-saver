@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jinpeng2700-tech/cpa-plugin-token-saver/panel/panel-release.schema.json",
+  "title": "CLIProxyAPI Patched Management Release Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "schema_id",
+    "upstream_repository",
+    "upstream_tag",
+    "upstream_commit",
+    "patch_file",
+    "patch_sha256",
+    "asset"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "schema_id": {
+      "const": "cliproxyapi-patched-management-release/v1"
+    },
+    "upstream_repository": {
+      "const": "https://github.com/router-for-me/Cli-Proxy-API-Management-Center.git"
+    },
+    "upstream_tag": {
+      "$ref": "#/$defs/tag"
+    },
+    "upstream_commit": {
+      "$ref": "#/$defs/commit"
+    },
+    "patch_file": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+\\.patch$"
+    },
+    "patch_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "size",
+        "sha256"
+      ],
+      "properties": {
+        "name": {
+          "const": "management.html"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "tag": {
+      "type": "string",
+      "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+      "maxLength": 65
+    }
+  }
+}

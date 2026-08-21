@@ -13,13 +13,19 @@ import (
 
 	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/config"
 	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/headroom"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/metrics"
 	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/saver"
 )
 
 func TestRegistrationDeclaresAuthenticatedRoutesAndPublicHeadroomResources(t *testing.T) {
 	handler := NewHandler(Options{})
 	registration := handler.Registration()
-	wantRoutes := []Route{{Method: http.MethodGet, Path: StatusRoute}, {Method: http.MethodPost, Path: SelfTestRoute}}
+	wantRoutes := []Route{
+		{Method: http.MethodGet, Path: StatusRoute},
+		{Method: http.MethodPost, Path: SelfTestRoute},
+		{Method: http.MethodGet, Path: DashboardRoute},
+		{Method: http.MethodPost, Path: HeadroomCheckRoute},
+	}
 	if !reflect.DeepEqual(registration.Routes, wantRoutes) {
 		t.Fatalf("routes = %#v, want %#v", registration.Routes, wantRoutes)
 	}
@@ -118,11 +124,24 @@ func TestHeadroomPageNeverRequestsAuthenticatedManagementRoutes(t *testing.T) {
 	if !strings.Contains(body, "/v0/resource/plugins/token-saver/headroom/status") {
 		t.Fatalf("page does not use public status resource: %s", response.Body)
 	}
+	for _, required := range []string{
+		"cpa.plugin.management.hello",
+		"cpa.plugin.management.ready",
+		"cpa.plugin.management.request",
+		"cpa.plugin.management.response",
+		"/plugins/token-saver/dashboard",
+		"/plugins/token-saver/headroom/check",
+		"需要新版管理面板",
+		"saved_bytes",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("page missing required string %q", required)
+		}
+	}
 	for _, forbidden := range []string{
-		"/v0/management/", "Authorization", "X-Management-Key", "URLSearchParams",
-		"localStorage", "management_key", "managementKey", "setInterval(fetchStatus, 10000)",
-		"msg.style.display = 'none'", "http://127.0.0.1:8787", "build_version",
-		"last_self_test", "data.metrics", "pluginVer", "mRtk", "mHeadroom",
+		"fetch('/v0/management", "fetch(\"/v0/management", "fetch(`/v0/management",
+		"managementKey", "Authorization", "localStorage", "sessionStorage",
+		"URLSearchParams", "document.cookie",
 	} {
 		if strings.Contains(body, forbidden) {
 			t.Errorf("page contains forbidden authenticated flow %q", forbidden)
@@ -435,4 +454,251 @@ func decodeStatus(t *testing.T, response Response) StatusDTO {
 		t.Fatalf("decode status: %v; body=%s", errDecode, response.Body)
 	}
 	return status
+}
+
+func TestDashboardReturnsPassiveStageMetricsAndHeadroomStatus(t *testing.T) {
+	now := time.Date(2026, time.August, 21, 10, 0, 0, 0, time.UTC)
+	var checkerCalls atomic.Int32
+	service := saver.NewService(saver.Options{
+		Now: func() time.Time { return now },
+	})
+	defer service.Close()
+	service.Metrics().Record(metrics.StageRTK, metrics.OutcomeExecuted, 100, 60, 5*time.Millisecond)
+
+	store, errStore := config.NewStore([]byte("headroom_enabled: true\nheadroom_url: http://127.0.0.1:8787\n"))
+	if errStore != nil {
+		t.Fatal(errStore)
+	}
+
+	handler := NewHandler(Options{
+		Saver:          service,
+		Now:            func() time.Time { return now },
+		ConfigSnapshot: func() *config.Store { return store },
+		HeadroomCheck: func(ctx context.Context, url string, timeout time.Duration) headroom.CheckResult {
+			checkerCalls.Add(1)
+			return headroom.CheckResult{Reachable: true, Outcome: headroom.OutcomeApplied, Latency: 10 * time.Millisecond}
+		},
+	})
+
+	// Call dashboard twice
+	resp1 := handler.Handle(context.Background(), Request{Method: http.MethodGet, Path: ManagementBasePath + DashboardRoute})
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard resp1 status = %d, body = %s", resp1.StatusCode, resp1.Body)
+	}
+	resp2 := handler.Handle(context.Background(), Request{Method: http.MethodGet, Path: ManagementBasePath + DashboardRoute})
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard resp2 status = %d, body = %s", resp2.StatusCode, resp2.Body)
+	}
+
+	if checkerCalls.Load() != 0 {
+		t.Fatal("passive dashboard called Headroom")
+	}
+
+	var dashboard DashboardDTO
+	if errDecode := json.Unmarshal(resp2.Body, &dashboard); errDecode != nil {
+		t.Fatalf("decode dashboard: %v; body = %s", errDecode, resp2.Body)
+	}
+
+	if dashboard.Stages.RTK.SavedBytes != 40 {
+		t.Fatalf("RTK = %#v", dashboard.Stages.RTK)
+	}
+	if dashboard.Stages.RTK.Executed != 1 || dashboard.Stages.RTK.InputBytes != 100 || dashboard.Stages.RTK.OutputBytes != 60 {
+		t.Fatalf("RTK stage counters = %#v", dashboard.Stages.RTK)
+	}
+	if !dashboard.Headroom.Enabled || dashboard.Headroom.URL != "http://127.0.0.1:8787" || dashboard.Headroom.Status != HeadroomStatusUnknown || dashboard.Headroom.Circuit != HeadroomCircuitClosed {
+		t.Fatalf("headroom initial dashboard = %#v", dashboard.Headroom)
+	}
+	if dashboard.Headroom.LastCheckedAt != nil || dashboard.Headroom.LastLatencyMS != nil || dashboard.Headroom.LastOutcome != "unknown" {
+		t.Fatalf("headroom initial sample pointers = %#v", dashboard.Headroom)
+	}
+}
+
+func TestHeadroomCheckIsolatedExecutionAndDashboardReflection(t *testing.T) {
+	now := time.Date(2026, time.August, 21, 10, 0, 0, 0, time.UTC)
+	var checkerCalls atomic.Int32
+	var capturedURL string
+	var capturedTimeout time.Duration
+
+	service := saver.NewService(saver.Options{
+		Now: func() time.Time { return now },
+	})
+	defer service.Close()
+	service.Metrics().Record(metrics.StageRTK, metrics.OutcomeExecuted, 100, 60, 5*time.Millisecond)
+
+	store, errStore := config.NewStore([]byte("headroom_enabled: true\nheadroom_url: http://127.0.0.1:8787\nheadroom_timeout_ms: 750\n"))
+	if errStore != nil {
+		t.Fatal(errStore)
+	}
+
+	checker := func(ctx context.Context, u string, timeout time.Duration) headroom.CheckResult {
+		checkerCalls.Add(1)
+		capturedURL = u
+		capturedTimeout = timeout
+		return headroom.CheckResult{
+			Reachable: true,
+			Outcome:   headroom.OutcomeApplied,
+			Latency:   12 * time.Millisecond,
+		}
+	}
+
+	handler := NewHandler(Options{
+		Saver:          service,
+		Now:            func() time.Time { return now },
+		ConfigSnapshot: func() *config.Store { return store },
+		HeadroomCheck:  checker,
+	})
+
+	metricsBefore := service.Metrics().Snapshot()
+	circuitBefore := service.HeadroomSnapshot().Circuit
+
+	resp := handler.Handle(context.Background(), Request{Method: http.MethodPost, Path: ManagementBasePath + HeadroomCheckRoute})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("check status = %d, body = %s", resp.StatusCode, resp.Body)
+	}
+
+	if capturedURL != "http://127.0.0.1:8787" || capturedTimeout != 750*time.Millisecond {
+		t.Fatalf("checker args = url:%s timeout:%s", capturedURL, capturedTimeout)
+	}
+
+	var checkRes HeadroomCheckDTO
+	if errDecode := json.Unmarshal(resp.Body, &checkRes); errDecode != nil {
+		t.Fatalf("decode check: %v; body=%s", errDecode, resp.Body)
+	}
+
+	if !checkRes.Reachable || checkRes.Status != HeadroomStatusReady || checkRes.Outcome != string(headroom.OutcomeApplied) || checkRes.LatencyMS != 12 || !checkRes.TestedAt.Equal(now) {
+		t.Fatalf("check result = %#v", checkRes)
+	}
+
+	metricsAfter := service.Metrics().Snapshot()
+	circuitAfter := service.HeadroomSnapshot().Circuit
+	if !reflect.DeepEqual(metricsBefore.Stages, metricsAfter.Stages) {
+		t.Fatalf("metrics mutated by check: before=%#v after=%#v", metricsBefore.Stages, metricsAfter.Stages)
+	}
+	if circuitBefore != circuitAfter {
+		t.Fatalf("circuit mutated by check: before=%v after=%v", circuitBefore, circuitAfter)
+	}
+
+	// Verify dashboard remembers the result
+	respDash := handler.Handle(context.Background(), Request{Method: http.MethodGet, Path: ManagementBasePath + DashboardRoute})
+	var dash DashboardDTO
+	if errDecode := json.Unmarshal(respDash.Body, &dash); errDecode != nil {
+		t.Fatalf("decode dashboard: %v", errDecode)
+	}
+	if dash.Headroom.LastLatencyMS == nil || *dash.Headroom.LastLatencyMS != 12 {
+		t.Fatalf("dash LastLatencyMS = %#v", dash.Headroom.LastLatencyMS)
+	}
+	if dash.Headroom.LastCheckedAt == nil || !dash.Headroom.LastCheckedAt.Equal(now) {
+		t.Fatalf("dash LastCheckedAt = %#v", dash.Headroom.LastCheckedAt)
+	}
+	if dash.Headroom.LastOutcome != string(headroom.OutcomeApplied) {
+		t.Fatalf("dash LastOutcome = %q", dash.Headroom.LastOutcome)
+	}
+}
+
+func TestHeadroomCheckErrorCasesAndCooldown(t *testing.T) {
+	now := time.Date(2026, time.August, 21, 10, 0, 0, 0, time.UTC)
+	currentTime := now
+
+	// 1. Disabled case -> 409
+	storeDisabled, _ := config.NewStore([]byte("headroom_enabled: false\n"))
+	handlerDisabled := NewHandler(Options{
+		Now:            func() time.Time { return currentTime },
+		ConfigSnapshot: func() *config.Store { return storeDisabled },
+	})
+	respDisabled := handlerDisabled.Handle(context.Background(), Request{Method: http.MethodPost, Path: ManagementBasePath + HeadroomCheckRoute})
+	if respDisabled.StatusCode != http.StatusConflict {
+		t.Fatalf("disabled status = %d, want 409", respDisabled.StatusCode)
+	}
+
+	// 2. Cold invalid config -> 409
+	storeInvalid, _ := config.NewStore([]byte("headroom_enabled: true\nheadroom_url: http://invalid.example\n"))
+	handlerInvalid := NewHandler(Options{
+		Now:            func() time.Time { return currentTime },
+		ConfigSnapshot: func() *config.Store { return storeInvalid },
+	})
+	respInvalid := handlerInvalid.Handle(context.Background(), Request{Method: http.MethodPost, Path: ManagementBasePath + HeadroomCheckRoute})
+	if respInvalid.StatusCode != http.StatusConflict {
+		t.Fatalf("invalid status = %d, want 409", respInvalid.StatusCode)
+	}
+
+	// 3. Timeout / connection unreachable case -> 200 with reachable:false, status:degraded
+	storeValid, _ := config.NewStore([]byte("headroom_enabled: true\nheadroom_url: http://127.0.0.1:8787\n"))
+	handlerUnreachable := NewHandler(Options{
+		Now:            func() time.Time { return currentTime },
+		ConfigSnapshot: func() *config.Store { return storeValid },
+		HeadroomCheck: func(ctx context.Context, u string, d time.Duration) headroom.CheckResult {
+			return headroom.CheckResult{
+				Reachable: false,
+				Outcome:   headroom.OutcomeTimeout,
+				Latency:   100 * time.Millisecond,
+			}
+		},
+	})
+	respUnreachable := handlerUnreachable.Handle(context.Background(), Request{Method: http.MethodPost, Path: ManagementBasePath + HeadroomCheckRoute})
+	if respUnreachable.StatusCode != http.StatusOK {
+		t.Fatalf("unreachable status = %d, want 200", respUnreachable.StatusCode)
+	}
+	var unreachCheck HeadroomCheckDTO
+	if err := json.Unmarshal(respUnreachable.Body, &unreachCheck); err != nil {
+		t.Fatal(err)
+	}
+	if unreachCheck.Reachable || unreachCheck.Status != HeadroomStatusDegraded || unreachCheck.Outcome != string(headroom.OutcomeTimeout) || unreachCheck.LatencyMS != 100 {
+		t.Fatalf("unreachable check = %#v", unreachCheck)
+	}
+
+	// 4. Cooldown 2 seconds: immediate second request returns 429
+	respCooldown := handlerUnreachable.Handle(context.Background(), Request{Method: http.MethodPost, Path: ManagementBasePath + HeadroomCheckRoute})
+	if respCooldown.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("cooldown status = %d, want 429", respCooldown.StatusCode)
+	}
+
+	// After 1999ms -> still 429
+	currentTime = currentTime.Add(1999 * time.Millisecond)
+	respStillCooldown := handlerUnreachable.Handle(context.Background(), Request{Method: http.MethodPost, Path: ManagementBasePath + HeadroomCheckRoute})
+	if respStillCooldown.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("1999ms cooldown status = %d, want 429", respStillCooldown.StatusCode)
+	}
+
+	// Exactly 2s later -> 200 OK
+	currentTime = now.Add(2000 * time.Millisecond)
+	respAfterCooldown := handlerUnreachable.Handle(context.Background(), Request{Method: http.MethodPost, Path: ManagementBasePath + HeadroomCheckRoute})
+	if respAfterCooldown.StatusCode != http.StatusOK {
+		t.Fatalf("2000ms status = %d, want 200", respAfterCooldown.StatusCode)
+	}
+}
+
+func TestHeadroomCheckInFlightExclusivity(t *testing.T) {
+	now := time.Date(2026, time.August, 21, 10, 0, 0, 0, time.UTC)
+	storeValid, _ := config.NewStore([]byte("headroom_enabled: true\nheadroom_url: http://127.0.0.1:8787\n"))
+
+	inFlightBlocker := make(chan struct{})
+	started := make(chan struct{})
+
+	handler := NewHandler(Options{
+		Now:            func() time.Time { return now },
+		ConfigSnapshot: func() *config.Store { return storeValid },
+		HeadroomCheck: func(ctx context.Context, u string, d time.Duration) headroom.CheckResult {
+			close(started)
+			<-inFlightBlocker
+			return headroom.CheckResult{Reachable: true, Outcome: headroom.OutcomeApplied, Latency: 10 * time.Millisecond}
+		},
+	})
+
+	doneFirst := make(chan Response)
+	go func() {
+		doneFirst <- handler.Handle(context.Background(), Request{Method: http.MethodPost, Path: ManagementBasePath + HeadroomCheckRoute})
+	}()
+
+	<-started
+	// Second concurrent check must get 429 (in-flight)
+	respSecond := handler.Handle(context.Background(), Request{Method: http.MethodPost, Path: ManagementBasePath + HeadroomCheckRoute})
+	if respSecond.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("in-flight second call status = %d, want 429", respSecond.StatusCode)
+	}
+
+	close(inFlightBlocker)
+	respFirst := <-doneFirst
+	if respFirst.StatusCode != http.StatusOK {
+		t.Fatalf("first call status = %d, want 200", respFirst.StatusCode)
+	}
 }

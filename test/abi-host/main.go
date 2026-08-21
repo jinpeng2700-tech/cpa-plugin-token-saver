@@ -145,9 +145,12 @@ func runHost(path string) (hostReport, error) {
 	}
 	_ = json.Unmarshal(managementRaw, &managementEnvelope)
 	_ = json.Unmarshal(managementEnvelope.Result, &managementResult)
-	managementRoutesOK := managementRC == 0 && managementEnvelope.OK && len(managementResult.Routes) == 2 && len(managementResult.Resources) == 2 &&
+	managementRoutesOK := managementRC == 0 && managementEnvelope.OK && len(managementResult.Routes) == 4 && len(managementResult.Resources) == 2 &&
 		bytes.Contains(managementEnvelope.Result, []byte(`"Method":"GET"`)) && bytes.Contains(managementEnvelope.Result, []byte(`"Path":"/plugins/token-saver/status"`)) &&
 		bytes.Contains(managementEnvelope.Result, []byte(`"Method":"POST"`)) && bytes.Contains(managementEnvelope.Result, []byte(`"Path":"/plugins/token-saver/self-test"`)) &&
+		bytes.Contains(managementEnvelope.Result, []byte(`"Path":"/plugins/token-saver/dashboard"`)) &&
+		bytes.Contains(managementEnvelope.Result, []byte(`"Path":"/plugins/token-saver/headroom/check"`)) &&
+		bytes.Contains(managementEnvelope.Result, []byte(`"Path":"/headroom"`)) &&
 		bytes.Contains(managementEnvelope.Result, []byte(`"Path":"/headroom/status"`))
 
 	managementRequest, _ := json.Marshal(struct {

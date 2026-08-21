@@ -107,30 +107,43 @@ jobs:
           official_name=$(jq -er '.official.assets.archive.name' "$root/selection.json")
           plugin_name=$(jq -er '.plugin.assets.plugin.name' "$root/selection.json")
           probe_name=$(jq -er '.plugin.assets.probe.name' "$root/selection.json")
+          panel_name=$(jq -er '.panel.assets.asset.name' "$root/selection.json")
           download "$OFFICIAL_REPOSITORY" '.official.assets.archive' "$root/assets/$official_name"
           download "$OFFICIAL_REPOSITORY" '.official.assets.checksums' "$root/assets/checksums.txt"
           download "$PLUGIN_REPOSITORY" '.plugin.assets.plugin' "$root/assets/$plugin_name"
           download "$PLUGIN_REPOSITORY" '.plugin.assets.probe' "$root/assets/$probe_name"
           download "$PLUGIN_REPOSITORY" '.plugin.assets.metadata' "$root/assets/release-metadata.json"
           download "$PLUGIN_REPOSITORY" '.plugin.assets.checksums' "$root/assets/SHA256SUMS"
+          download "$PLUGIN_REPOSITORY" '.panel.assets.asset' "$root/assets/$panel_name"
+          download "$PLUGIN_REPOSITORY" '.panel.assets.checksums' "$root/assets/management.html.sha256"
+          download "$PLUGIN_REPOSITORY" '.panel.assets.manifest' "$root/assets/panel-manifest.json"
           plugin_tag=$(jq -er '.plugin.tag' "$root/selection.json")
           gh api "repos/${PLUGIN_REPOSITORY}/commits/${plugin_tag}" --jq .sha > "$root/plugin-source-commit"
+          panel_tag=$(jq -er '.panel.tag' "$root/selection.json")
+          gh api "repos/${PLUGIN_REPOSITORY}/commits/${panel_tag}" --jq .sha > "$root/panel-source-commit"
           tar -xzf "$root/assets/$official_name" -C "$root/extracted"
           find "$root/extracted" -type f \( -name cli-proxy-api -o -name CLIProxyAPI \) -print > "$root/candidates"
           test "$(wc -l < "$root/candidates")" -eq 1
-      - name: Verify plugin release attestations
+      - name: Verify plugin and panel release attestations
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/promotion"
           plugin_tag=$(jq -er '.plugin.tag' "$root/selection.json")
-          identity="https://github.com/${PLUGIN_REPOSITORY}/.github/workflows/release.yml@refs/tags/${plugin_tag}"
+          identity_plugin="https://github.com/${PLUGIN_REPOSITORY}/.github/workflows/release.yml@refs/tags/${plugin_tag}"
           gh attestation verify "$root/assets/$(jq -er '.plugin.assets.plugin.name' "$root/selection.json")" \
-            --repo "$PLUGIN_REPOSITORY" --cert-identity "$identity" \
+            --repo "$PLUGIN_REPOSITORY" --cert-identity "$identity_plugin" \
             --cert-oidc-issuer "https://token.actions.githubusercontent.com"
           gh attestation verify "$root/assets/$(jq -er '.plugin.assets.probe.name' "$root/selection.json")" \
-            --repo "$PLUGIN_REPOSITORY" --cert-identity "$identity" \
+            --repo "$PLUGIN_REPOSITORY" --cert-identity "$identity_plugin" \
+            --cert-oidc-issuer "https://token.actions.githubusercontent.com"
+          identity_panel="https://github.com/${PLUGIN_REPOSITORY}/.github/workflows/release-panel.yml@refs/heads/main"
+          gh attestation verify "$root/assets/$(jq -er '.panel.assets.asset.name' "$root/selection.json")" \
+            --repo "$PLUGIN_REPOSITORY" --cert-identity "$identity_panel" \
+            --cert-oidc-issuer "https://token.actions.githubusercontent.com"
+          gh attestation verify "$root/assets/$(jq -er '.panel.assets.manifest.name' "$root/selection.json")" \
+            --repo "$PLUGIN_REPOSITORY" --cert-identity "$identity_panel" \
             --cert-oidc-issuer "https://token.actions.githubusercontent.com"
       - name: Lock candidate bytes and identities
         run: |
@@ -146,6 +159,10 @@ jobs:
           PLUGIN_METADATA="$root/assets/release-metadata.json" \
           PLUGIN_CHECKSUMS="$root/assets/SHA256SUMS" \
           PLUGIN_SOURCE_COMMIT="$(cat "$root/plugin-source-commit")" \
+          PANEL_ASSET="$root/assets/$(jq -er '.panel.assets.asset.name' "$root/selection.json")" \
+          PANEL_CHECKSUMS="$root/assets/management.html.sha256" \
+          PANEL_MANIFEST="$root/assets/panel-manifest.json" \
+          PANEL_SOURCE_COMMIT="$(cat "$root/panel-source-commit")" \
           LOCKED_OUTPUT="$root/locked.json" \
             go test -count=1 -run '^TestPromotionCommand$' ./deploy/tests
       - name: Execute exact compatibility gate

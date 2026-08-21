@@ -222,3 +222,11 @@ func validOutcome(outcome Outcome) bool {
 		return false
 	}
 }
+
+// SavedBytes returns non-negative saved bytes without uint64 underflow.
+func (snapshot StageSnapshot) SavedBytes() uint64 {
+	if snapshot.OutputBytes >= snapshot.InputBytes {
+		return 0
+	}
+	return snapshot.InputBytes - snapshot.OutputBytes
+}

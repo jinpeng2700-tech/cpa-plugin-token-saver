@@ -8,7 +8,7 @@ import (
 const (
 	SchemaVersion   = 1
 	RequiredPlugin  = "token-saver"
-	RequiredVersion = "1.0.2"
+	RequiredVersion = "1.1.0"
 	CavemanMarker   = "[CPA_TOKEN_SAVER_CAVEMAN_START]"
 	PonytailMarker  = "[CPA_TOKEN_SAVER_PONYTAIL_START]"
 )
@@ -36,6 +36,8 @@ const (
 	CodePluginNotEffective  = "plugin_not_effective"
 	CodePluginVersion       = "plugin_version_mismatch"
 	CodePublicStatus        = "public_status_failed"
+	CodeDashboard           = "dashboard_failed"
+	CodeHeadroomCheck       = "headroom_check_failed"
 	CodeStatus              = "plugin_status_failed"
 	CodePluginABI           = "plugin_abi_mismatch"
 	CodePluginRPC           = "plugin_rpc_mismatch"

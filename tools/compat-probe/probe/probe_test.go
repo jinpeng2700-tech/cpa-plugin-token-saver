@@ -80,6 +80,73 @@ func TestPublicStatusValidationRequiresExactSafeFields(t *testing.T) {
 	}
 }
 
+func TestDashboardValidationRequiresExactSafeFields(t *testing.T) {
+	valid := []byte(`{
+		"started_at": "2026-08-21T00:00:00Z",
+		"headroom": {
+			"enabled": true,
+			"url": "http://127.0.0.1:8787",
+			"status": "ready",
+			"circuit": "closed",
+			"last_checked_at": "2026-08-21T00:00:00Z",
+			"last_latency_ms": 12,
+			"last_outcome": "applied"
+		},
+		"stages": {
+			"rtk": {"executed":1,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":100,"output_bytes":60,"saved_bytes":40,"duration_ns":1000},
+			"headroom": {"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0},
+			"caveman": {"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0},
+			"ponytail": {"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0}
+		}
+	}`)
+	dash, ok := validDashboardRaw(valid, "http://127.0.0.1:8787")
+	if !ok || dash == nil {
+		t.Fatal("valid dashboard was rejected")
+	}
+
+	unknownField := []byte(`{"started_at":"2026-08-21T00:00:00Z","extra":1,"headroom":{"enabled":true,"url":"http://127.0.0.1:8787","status":"ready","circuit":"closed","last_checked_at":null,"last_latency_ms":null,"last_outcome":"unknown"},"stages":{"rtk":{"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0},"headroom":{"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0},"caveman":{"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0},"ponytail":{"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0}}}`)
+	if _, okUnknown := validDashboardRaw(unknownField, "http://127.0.0.1:8787"); okUnknown {
+		t.Fatal("dashboard with unknown top-level field was accepted")
+	}
+
+	missingField := []byte(`{"started_at":"2026-08-21T00:00:00Z","headroom":{"enabled":true,"url":"http://127.0.0.1:8787","status":"ready","circuit":"closed","last_checked_at":null,"last_latency_ms":null,"last_outcome":"unknown"}}`)
+	if _, okMissing := validDashboardRaw(missingField, "http://127.0.0.1:8787"); okMissing {
+		t.Fatal("dashboard missing stages was accepted")
+	}
+
+	savedMismatch := []byte(`{
+		"started_at": "2026-08-21T00:00:00Z",
+		"headroom": {"enabled":true,"url":"http://127.0.0.1:8787","status":"ready","circuit":"closed","last_checked_at":null,"last_latency_ms":null,"last_outcome":"unknown"},
+		"stages": {
+			"rtk": {"executed":1,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":100,"output_bytes":60,"saved_bytes":10,"duration_ns":1000},
+			"headroom": {"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0},
+			"caveman": {"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0},
+			"ponytail": {"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0}
+		}
+	}`)
+	if _, okSaved := validDashboardRaw(savedMismatch, "http://127.0.0.1:8787"); okSaved {
+		t.Fatal("dashboard with saved_bytes mismatch was accepted")
+	}
+}
+
+func TestHeadroomCheckValidationRequiresExactSafeFields(t *testing.T) {
+	valid := []byte(`{"reachable":true,"status":"ready","outcome":"applied","latency_ms":12,"tested_at":"2026-08-21T00:00:00Z"}`)
+	check, ok := validHeadroomCheckRaw(valid)
+	if !ok || check == nil || !check.Reachable || check.LatencyMS != 12 {
+		t.Fatal("valid headroom check was rejected")
+	}
+
+	unknownField := []byte(`{"reachable":true,"status":"ready","outcome":"applied","latency_ms":12,"tested_at":"2026-08-21T00:00:00Z","extra":"leak"}`)
+	if _, okUnknown := validHeadroomCheckRaw(unknownField); okUnknown {
+		t.Fatal("headroom check with unknown field was accepted")
+	}
+
+	missingField := []byte(`{"reachable":true,"status":"ready","outcome":"applied","latency_ms":12}`)
+	if _, okMissing := validHeadroomCheckRaw(missingField); okMissing {
+		t.Fatal("headroom check missing tested_at was accepted")
+	}
+}
+
 func TestMockCapturesStayBounded(t *testing.T) {
 	provider := &mockProvider{}
 	for _, body := range []string{

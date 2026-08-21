@@ -494,3 +494,8 @@ func (breaker *circuitBreaker) finish(now time.Time, probe, success bool) {
 		breaker.halfOpenInFlight = false
 	}
 }
+
+// Close releases idle connections held by the client transport.
+func (client *Client) Close() {
+	client.CloseIdleConnections()
+}
