@@ -788,6 +788,15 @@ func readPromotionWorkflow(t *testing.T) releaseWorkflow {
 	return workflow
 }
 
+func readPanelWorkflow(t *testing.T) releaseWorkflow {
+	t.Helper()
+	var workflow releaseWorkflow
+	if err := yaml.Unmarshal([]byte(readRepositoryFile(t, ".github/workflows/release-panel.yml")), &workflow); err != nil {
+		t.Fatalf("parse release-panel workflow: %v", err)
+	}
+	return workflow
+}
+
 func requireReleaseJob(t *testing.T, workflow releaseWorkflow, name string) releaseJob {
 	t.Helper()
 	job, ok := workflow.Jobs[name]
@@ -943,7 +952,7 @@ func TestCIWorkflowUsesReadOnlyPermissions(t *testing.T) {
 }
 
 func TestAllWorkflowCheckoutsDisableCredentialPersistence(t *testing.T) {
-	for _, workflowPath := range []string{".github/workflows/ci.yml", ".github/workflows/release.yml"} {
+	for _, workflowPath := range []string{".github/workflows/ci.yml", ".github/workflows/release.yml", ".github/workflows/release-panel.yml"} {
 		var workflow releaseWorkflow
 		if err := yaml.Unmarshal([]byte(readRepositoryFile(t, workflowPath)), &workflow); err != nil {
 			t.Fatalf("parse %s: %v", workflowPath, err)
@@ -1108,6 +1117,115 @@ func TestReleaseWorkflowUsesFreshImmutableBuildArtifact(t *testing.T) {
 	}
 	if !strings.Contains(compatibilityRun, "EXPECTED_MANIFEST_SHA256") {
 		t.Fatal("compatibility must compare the downloaded manifest with the build job output")
+	}
+}
+
+func TestPanelReleaseWorkflowIsScheduledManualReadOnlyAndAttested(t *testing.T) {
+	workflow := readPanelWorkflow(t)
+
+	schedule, ok := workflow.On["schedule"].([]any)
+	if !ok || len(schedule) != 1 {
+		t.Fatalf("panel release schedule = %#v, want one cron entry", workflow.On["schedule"])
+	}
+	entry, ok := schedule[0].(map[string]any)
+	if !ok || workflowValue(entry, "cron") != "43 */6 * * *" {
+		t.Fatalf("panel release cron = %q, want 43 */6 * * *", workflowValue(entry, "cron"))
+	}
+	if _, ok := workflow.On["workflow_dispatch"]; !ok {
+		t.Fatal("panel release workflow missing workflow_dispatch trigger")
+	}
+
+	if workflow.Permissions["contents"] != "read" {
+		t.Fatalf("panel release top-level contents permission = %q, want read", workflow.Permissions["contents"])
+	}
+
+	build := requireReleaseJob(t, workflow, "build")
+	publish := requireReleaseJob(t, workflow, "publish")
+
+	if !jobNeeds(publish, "build") {
+		t.Fatal("panel release publish job must depend on build job")
+	}
+
+	if build.Permissions != nil && len(build.Permissions) > 0 {
+		for perm, val := range build.Permissions {
+			if val == "write" {
+				t.Fatalf("panel release build job has write permission: %s=%s", perm, val)
+			}
+		}
+	}
+
+	wantPublishPermissions := map[string]string{
+		"actions":      "read",
+		"attestations": "write",
+		"contents":     "write",
+		"id-token":     "write",
+	}
+	for k, want := range wantPublishPermissions {
+		if publish.Permissions[k] != want {
+			t.Fatalf("panel publish permission %s = %q, want %q", k, publish.Permissions[k], want)
+		}
+	}
+	for k := range publish.Permissions {
+		if _, ok := wantPublishPermissions[k]; !ok {
+			t.Fatalf("panel publish has unexpected permission: %s", k)
+		}
+	}
+
+	buildRun := joinedRun(build)
+	for _, want := range []string{
+		"gh api --paginate --slurp repos/router-for-me/Cli-Proxy-API-Management-Center/releases",
+		"panel/build-panel.py",
+		"management.html",
+		"management.html.sha256",
+		"panel-manifest.json",
+	} {
+		if !strings.Contains(buildRun, want) {
+			t.Errorf("panel release build job missing %q", want)
+		}
+	}
+	if strings.Contains(buildRun, "/releases/latest") {
+		t.Fatal("panel release build must not use /releases/latest")
+	}
+
+	publishRun := joinedRun(publish)
+	for _, want := range []string{
+		"gh release create",
+		"gh release view",
+	} {
+		if !strings.Contains(publishRun, want) {
+			t.Errorf("panel release publish job missing %q", want)
+		}
+	}
+	if strings.Contains(publishRun, "--clobber") || strings.Contains(publishRun, "gh release upload") {
+		t.Fatal("panel release publish contains forbidden mutable flag/command")
+	}
+
+	attestIndex, publishIndex := -1, -1
+	for index, step := range publish.Steps {
+		if strings.HasPrefix(step.Uses, "actions/attest-build-provenance@") {
+			attestIndex = index
+		}
+		if strings.Contains(step.Run, "gh release create") {
+			publishIndex = index
+		}
+	}
+	if attestIndex == -1 || publishIndex == -1 || attestIndex >= publishIndex {
+		t.Fatalf("panel release attestation must precede release creation (attest=%d, publish=%d)", attestIndex, publishIndex)
+	}
+}
+
+func TestPanelReleaseWorkflowActionPinning(t *testing.T) {
+	fullSHA := regexp.MustCompile(`^[^@\s]+@[0-9a-f]{40}$`)
+	workflow := readPanelWorkflow(t)
+	for _, job := range workflow.Jobs {
+		for _, step := range job.Steps {
+			if step.Uses == "" {
+				continue
+			}
+			if !fullSHA.MatchString(step.Uses) {
+				t.Errorf("panel workflow action is not pinned to full commit SHA: %s", step.Uses)
+			}
+		}
 	}
 }
 

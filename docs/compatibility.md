@@ -62,3 +62,17 @@ For a root-approved security override that exactly matches CLI version/SHA/archi
 ## External dependency blockers
 
 Headroom currently listens on `0.0.0.0:8787`; this is a separate production blocker. Before the Headroom stage is enabled it must listen only on literal `127.0.0.1` and/or `::1`, have public egress denied by default, and have telemetry and raw-prompt logging disabled. A Headroom outage after those controls are in place is a degraded stage, not a CLI compatibility failure.
+
+
+## Patched Management Center release contract
+
+Official Management Center releases from `router-for-me/Cli-Proxy-API-Management-Center` are tracked automatically by `.github/workflows/release-panel.yml@refs/heads/main` on schedule `43 */6 * * *` and via manual dispatch.
+
+Each panel release:
+1. resolves the latest non-draft, non-prerelease upstream tag;
+2. applies bridge patch `panel/patches/0001-plugin-management-bridge.patch` via `panel/build-panel.py`;
+3. builds and verifies self-contained single-file HTML reproducibly twice;
+4. attests provenance before creating the GitHub release;
+5. publishes immutable tag format `panel-v<upstream>-bridge.<revision>` (e.g. `panel-v1.22.6-bridge.1`) containing exactly `management.html`, `management.html.sha256`, and `panel-manifest.json`.
+
+Existing release tags are never overwritten or clobbered.

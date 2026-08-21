@@ -1,0 +1,153 @@
+name: release panel
+
+on:
+  schedule:
+    - cron: "43 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-panel-stable
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      upstream_tag: ${{ steps.build.outputs.upstream_tag }}
+      release_tag: ${{ steps.build.outputs.release_tag }}
+      publish: ${{ steps.build.outputs.publish }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38
+        with:
+          python-version: "3.11"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: "1.3.14"
+
+      - name: Select latest official panel release
+        id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp repos/router-for-me/Cli-Proxy-API-Management-Center/releases > upstream-releases.json
+          tag=$(jq -r '.[][] | select(.draft == false and .prerelease == false and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))) | .tag_name' upstream-releases.json | head -n 1)
+          if [ -z "$tag" ]; then
+            echo "No valid official panel release found" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Check if release tag already exists
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_TAG: ${{ steps.select.outputs.tag }}
+        run: |
+          set -euo pipefail
+          release_tag="panel-${UPSTREAM_TAG}-bridge.1"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $release_tag already exists; skipping build"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build patched management panel
+        id: build
+        if: steps.check.outputs.publish == 'true'
+        env:
+          UPSTREAM_TAG: ${{ steps.select.outputs.tag }}
+          RELEASE_TAG: ${{ steps.check.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          python panel/build-panel.py --upstream-tag "$UPSTREAM_TAG" --output dist-panel
+          test -f dist-panel/management.html
+          test -f dist-panel/management.html.sha256
+          test -f dist-panel/panel-manifest.json
+          echo "upstream_tag=$UPSTREAM_TAG" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: steps.check.outputs.publish == 'true'
+        with:
+          name: panel-dist-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dist-panel/management.html
+            dist-panel/management.html.sha256
+            dist-panel/panel-manifest.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: false
+
+  publish:
+    needs: build
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: panel-dist-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist-panel
+
+      - name: Flatten downloaded artifact directory if nested
+        run: |
+          if [ -d "dist-panel/dist-panel" ]; then
+            cp -a dist-panel/dist-panel/* dist-panel/
+            rm -r dist-panel/dist-panel
+          fi
+          ls -la dist-panel/
+
+      - name: Verify release tag does not exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; refusing duplicate mutation" >&2
+            exit 1
+          fi
+
+      - name: Attest exact panel release artifacts
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+        with:
+          subject-path: |
+            dist-panel/management.html
+            dist-panel/management.html.sha256
+            dist-panel/panel-manifest.json
+
+      - name: Publish immutable panel release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+          UPSTREAM_TAG: ${{ needs.build.outputs.upstream_tag }}
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_TAG" \
+            dist-panel/management.html \
+            dist-panel/management.html.sha256 \
+            dist-panel/panel-manifest.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --latest=false \
+            --title "$RELEASE_TAG" \
+            --notes "Patched single-file Management Center release tracking official $UPSTREAM_TAG with Token Saver iframe bridge."
