@@ -1890,6 +1890,28 @@ func TestPromotionTransitionFromSchemaV1Lineage(t *testing.T) {
 	}
 }
 
+func TestWritePreviousPromotionJSONPreservesSchemaV1WireShape(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "previous.json")
+	previous := approvedManifestV1Fixture("7.2.138", "1.0.2", 4, "")
+
+	writePreviousPromotionJSON(t, path, previous)
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte(`"panel"`)) {
+		t.Fatalf("schema v1 predecessor unexpectedly contains panel: %s", raw)
+	}
+	decoded, err := validatePreviousApprovedManifest(raw)
+	if err != nil {
+		t.Fatalf("schema v1 predecessor cannot be read after serialization: %v", err)
+	}
+	if decoded.SchemaVersion != 1 || decoded.Fingerprint != previous.Fingerprint {
+		t.Fatalf("schema v1 predecessor changed during serialization: %#v", decoded)
+	}
+}
+
 func TestPromotionLocksBytesBeforeCompatibility(t *testing.T) {
 	root := t.TempDir()
 	paths := promotionPaths{
@@ -2056,7 +2078,7 @@ func TestPromotionCommand(t *testing.T) {
 		if previous == nil {
 			writePromotionFile(t, os.Getenv("PREVIOUS_OUTPUT"), "null\n")
 		} else {
-			writePromotionJSON(t, os.Getenv("PREVIOUS_OUTPUT"), previous)
+			writePreviousPromotionJSON(t, os.Getenv("PREVIOUS_OUTPUT"), previous)
 		}
 	case "lock":
 		var selection promotionSelection
@@ -2521,6 +2543,26 @@ func writePromotionJSON(t *testing.T, name string, value any) {
 		t.Fatal(err)
 	}
 	writePromotionFile(t, name, string(raw)+"\n")
+}
+
+func writePreviousPromotionJSON(t *testing.T, name string, manifest *approvedManifest) {
+	t.Helper()
+	if manifest.SchemaVersion != 1 {
+		writePromotionJSON(t, name, manifest)
+		return
+	}
+	writePromotionJSON(t, name, approvedManifestV1{
+		SchemaVersion:       manifest.SchemaVersion,
+		VerifierSchema:      manifest.VerifierSchema,
+		Channel:             manifest.Channel,
+		ChannelGeneration:   manifest.ChannelGeneration,
+		PriorFingerprint:    manifest.PriorFingerprint,
+		Fingerprint:         manifest.Fingerprint,
+		Official:            manifest.Official,
+		Plugin:              manifest.Plugin,
+		Compatibility:       manifest.Compatibility,
+		ApprovedAttestation: manifest.ApprovedAttestation,
+	})
 }
 
 func readOptionalApprovedManifest(t *testing.T, name string) *approvedManifest {
