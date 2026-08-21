@@ -45,11 +45,37 @@ authenticated `apiClient` and returns only the response body or a normalized
 error. The management key never leaves the parent process and is never placed
 in a message.
 
+Because Management Center loads the iframe with
+`referrerPolicy="no-referrer"`, the bridge starts with a credential-free
+handshake. The child sends a `hello` message with no request data. The parent
+validates the child source and origin, replies to that exact child origin, and
+the child records the parent origin from the reply. Only then can management
+requests begin. The initial `hello` is the only message allowed to use `*` as
+its target because it contains no capability, credential, route, or payload.
+
 The bridge is a small generic patch built over an exact official Management
 Center release. It is not a Token Saver page fork and does not add a second
 configuration UI.
 
 ## Message contract
+
+Handshake:
+
+```json
+{
+  "type": "cpa.plugin.management.hello",
+  "version": 1,
+  "pluginId": "token-saver"
+}
+```
+
+```json
+{
+  "type": "cpa.plugin.management.ready",
+  "version": 1,
+  "pluginId": "token-saver"
+}
+```
 
 Request:
 
@@ -82,6 +108,7 @@ Bridge rules:
 
 - accept messages only from `iframe.contentWindow`;
 - require `event.origin` to equal the resolved iframe URL origin;
+- require a successful `hello` / `ready` handshake before accepting requests;
 - require `pluginId` to equal the resource page plugin ID;
 - allow only `GET` and `POST`;
 - require path prefix `/v0/management/plugins/<pluginId>/`;
