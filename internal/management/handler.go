@@ -105,7 +105,7 @@ func (handler *Handler) Handle(ctx context.Context, request Request) (response R
 			return errorResponse(http.StatusMethodNotAllowed, ErrorMethodNotAllowed, "management method is not allowed")
 		}
 		return handler.selfTest(ctx)
-	case "/v0/resource/plugins/token-saver" + HeadroomPageRoute, HeadroomPageRoute:
+	case "/v0/resource/plugins/token-saver" + HeadroomPageRoute, "/v0/resource/plugins/token-saver/" + HeadroomPageRoute, HeadroomPageRoute:
 		if request.Method != http.MethodGet {
 			return errorResponse(http.StatusMethodNotAllowed, ErrorMethodNotAllowed, "resource method is not allowed")
 		}
