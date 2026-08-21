@@ -1386,9 +1386,9 @@ func TestReleaseWorkflowUsesFreshImmutableBuildArtifact(t *testing.T) {
 	}
 	uploadPath := workflowValue(upload.With, "path")
 	for _, want := range []string{
-		"token-saver-v1.0.2-linux-amd64.so",
-		"compat-probe-v1.0.2-linux-amd64",
-		"update-verifier-v1.0.2-linux-amd64",
+		"token-saver-v1.1.0-linux-amd64.so",
+		"compat-probe-v1.1.0-linux-amd64",
+		"update-verifier-v1.1.0-linux-amd64",
 		"GLIBC_REQUIREMENTS.txt",
 		"release-metadata.json",
 		"SHA256SUMS",

@@ -74,7 +74,7 @@ func TestPublicStatusValidationRequiresExactSafeFields(t *testing.T) {
 	if !validPublicStatus(valid, false, "disabled", "disabled") {
 		t.Fatal("valid public status was rejected")
 	}
-	valid["build_version"] = json.RawMessage(`"1.0.2"`)
+	valid["build_version"] = json.RawMessage(`"1.1.0"`)
 	if validPublicStatus(valid, false, "disabled", "disabled") {
 		t.Fatal("public status with extra fingerprint field was accepted")
 	}

@@ -14,10 +14,10 @@ sys.dont_write_bytecode = True
 
 CLI_TAG = "v7.2.136"
 CLI_ARCHIVE_SHA256 = "8f9160982bc2f26142f7b76a73fcc50f954c453470d5a6aefa81324ad18da288"
-PLUGIN_VERSION = "1.0.2"
+PLUGIN_VERSION = "1.1.0"
 INPUTS = {
     "cli-proxy-api": "cli-proxy-api",
-    "token-saver-v1.0.2.so": "plugins/linux/amd64/token-saver-v1.0.2.so",
+    "token-saver-v1.1.0.so": "plugins/linux/amd64/token-saver-v1.1.0.so",
     "compat-probe": "tools/compat-probe",
     "update-verifier": "tools/update-verifier",
 }
@@ -106,7 +106,7 @@ def build(staging, args, script_dir, repo_root, validator):
             "source_commit": args.plugin_source_commit,
             "builder_digest": args.plugin_builder_digest,
             "glibc_max": args.glibc_max,
-            "sha256": validator.sha256(staging / "plugins/linux/amd64/token-saver-v1.0.2.so"),
+            "sha256": validator.sha256(staging / "plugins/linux/amd64/token-saver-v1.1.0.so"),
         },
         "files": files,
         "manifest_exclusions": ["approved-artifacts.json", "SHA256SUMS"],
