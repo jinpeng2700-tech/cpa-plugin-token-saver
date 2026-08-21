@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Token &#33410;&30465;&##22120; & Headroom &#29366;&24577;</title>
+    <title>Token 节省器 & Headroom 状态</title>
     <style>
         :root {
             --bg: #0f141c;
@@ -74,7 +74,8 @@
             font-size: 13px;
             padding: 4px 10px;
             border-radius: 6px;
-            font-weight: 500; }
+            font-weight: 500;
+        }
         .status-ok { background: var(--green-bg); color: var(--green); }
         .status-err { background: var(--red-bg); color: var(--red); }
         .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
@@ -113,71 +114,166 @@
             font-size: 13px;
             display: none;
         }
-        .msg-ok { background: var(--greem                                                                             (                                                                                                                (            (       (      (                           (                            (                Q                               Q     M          (                              Q                                                          (              ((                          (                                    (                      !                                                                    (                                 	                                     (                                                                     (                                      M     Q                                       (                      (                  (                             (                                                                    UI0        (                                  U                                            (                  (                             (                                                                     Q              (                                  Q                                              (                  (                             (                                                                                    (                                                                                      (                  (                             (                                                                                           (                              Q   Q                                                       (                  (                                           (                                	                            M   Q       (                                                               !                                                                  (                         (                  (                        	                          (              ((                          (                                    (                                                                                5              (                                Y                                                                 (                  (                              (                                        (                                              IQ,                                                       (                              I                                       (                      (                                        (                                              !                                              (                              !                                            (                      (                                        (                                                                                           (                                                                         (                      (                                        (                                              A                                              (                              A                                            (                      (                  (              (          ((            (                    -      (                 (                         A            UI1M     A                              (                       A                            A                 (                            M          %        }          }              M          %               }            (                                     (         ((                            M         (                 (                               -     (                                                          	                     (                                                                                                  (                                              !QQ@                 (                                              (                      M            (                          (                                   	 %           	            9                                (                                   	 %                      9                    (                                   	 %           M     Q           Q       q     q     q     q     q     q     q     q     q       (             (        B           [   [    [  \   ] \   ] JH                  [Y[    ] [ [Y[   RY
-	   Y [  \  K [  \  ^   H	   
- 
-  ] K  Z[    \  [     	 K   I N                 [Y[    ] [ [Y[   RY
-	  \ [ [ U Y  K   \   [YH H  ] K  ] H  	  Y   Y XX  ] I   	  Y   Y Z[ X  ] I                  [Y[    ] [ [Y[   RY
-	  \ [ [ U Y  K [  \  ^   H  ] K  ] H  	  N   W N Y   M L 	   	  MY    MLX  M   I                      Y  X  ] H H  ] K  XY    W Y  X  ] N                     \  Z]  H  ] K  XY    W  \  Z]    	 [                            Y  H H    [Y[    ] [ [Y[   RY
-	  XY    P Y  I N                        H    [Y[    ] [ [Y[   RY
-	  XY    Q  	 N                        H    [Y[    ] [ [Y[   RY
-	  XY    T  ] \  ^ 	 N               Y 
- Y  X  ] H	    \  Z]  OOH	     Y	 H                    Y  K   \   [YH H	   ] \ X Y  H   ] \ [                           \   [YH H	        [                         [  \  ^   H	  N   W N Y   M L  
-  MY    N     M  L I               H [  H Y 
-  \  Z]  OOH	   [  H                    Y  K   \   [YH H	   ] \ X Y  H   ] \ Y\                           \   [YH H	        Y\                         [  \  ^   H	  M NM  M XY  MM W N    
-  M L   MY Y  N   JI               H [  H                    Y  K   \   [YH H	   ] \ X Y  H   ] \ Y\                           \   [YH H	        Y\                         [  \  ^   H	  M   W MM    M L   M  M  NM    M XM                B                 [Y[    ] [ [Y[   RY
-	  XY    P \  Z]	 K [  \  ^   H  \  Z]               Y 
-  ] K  \    [    \   ]
-H                      [Y[    ] [ [Y[   RY
-	  \   \   [YI K [  \  ^   H  ] K  \    [    \    \ [  
- 	 
-	 
-   ]   ] J  ] K  \    [    \   ]
-K    [ U [YT   [  
-H
- 	 I               B                    H H  ] K Y]  X       N                 [Y[    ] [ [Y[   RY
-	 T    K [  \  ^   H
- K      ^ X ] Y     
-H
- 	   M   I                  [Y[    ] [ [Y[   RY
-	 R XY    I K [  \  ^   H
- K  XY    O  ^ X ] Y     
-H
- 	   M   I                  [Y[    ] [ [Y[   RY
-	 P ] [X[  K [  \  ^   H
- K  ] [X[   ^ X ] Y     
-H
- 	   M   I                  [Y[    ] [ [Y[   RY
-	 T   ] Z[	 K [  \  ^   H
- K    ] Z[   ^ X ] Y     
-H
- 	   M   I           B  [          \ [    [   [    [  [   \ 
-
-H                         H    [Y[    ] [ [Y[   RY
-	  \      N                    \   H    [Y[    ] [ [Y[   RY
-	 \    	 N                  [  \   S  H	    [   \   W L      M     MM    N     N   MLM   NM  W N  Y  M  L  M          [                      \ X  Y  H   YN              \     [ K  \   ^H H	    I                        \   H  \    X[  K    
-N                H                          ^H H  ]  ^J
-N                         XY \   H  	     [  U \ I  	 \   X ] [         N                  Y 
-  ^JH  XY \    ]]    ^ ] [   H H	  X\ \ 	 
-   ^N                                          \  H ] Z]   ]  
-	     X[ Y [Y[     Y [      [ \ ] \   [  ] \ 	                         Y]     	    	                        XY \     XY \                           N 	  I                  JN                        [ \  Y  H X]     [ 
-  \    X[  K    
-H H   \ 
-N                         ] H H ] Z]   \      
-N                                   Y 
-  \    	    ] K  \ [   OOH	  \  Y	 H                       \     \   [YH H	 \  X    \  [                         \   [  \  ^   H	  L  H  M  L  M    NL L  N      Y   H  XY    H  M L H   NM    M   W MNL  M    NM  W N  Y   ML Y  N    
-  N  M  M Y  	 
-  [ \  Y 
- 	 \ W Y   	                   H [  H                       \     \   [YH H	 \  X    \  Y\                         \   [  \  ^   H	  L      M  L  M    M   W NL L  N      	 
- 
-  ] K \       	  N YXW M     MXLY  N     H
- 	 
-  N  M  M Y  	 
-  [ \  Y 
- 	 \ W Y   	                   B                 ] Z]   ]     ] \ 
-N              H  ]  
- \  H                   \     \   [YH H	 \  X    \  Y\                     \   [  \  ^   H	  L      N     MY LW MY  W MYL   	 
-  \   Y\  Y N              H  [ [  H                        \ X  Y  H  [  N                      [  \   S  H	    [    L      	      N              M      M N   XY    H	  NNN    	   M      M                L      MN     [                 B         B           ]     ] \ 
-N           ] [  \  [
-  ]     ] \   L   
-N           \         O      [ 
+        .msg-ok { background: var(--green-bg); color: var(--green); border: 1px solid var(--green); display: block; }
+        .msg-err { background: var(--red-bg); color: var(--red); border: 1px solid var(--red); display: block; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>⚡ Token 节省器 (Token Saver)</h1>
+            <span id="pipelineTag" class="tag tag-active">运行中</span>
+        </div>
+        <div class="card">
+            <div class="card-title">
+                <span>Headroom 上下文压缩服务</span>
+                <div id="headroomBadge" class="status-badge status-ok">
+                    <span id="headroomDot" class="dot dot-ok"></span>
+                    <span id="headroomStatusText">检测中...</span>
+                </div>
+            </div>
+            <div class="row">
+                <span class="label">代理地址 (URL)</span>
+                <span id="headroomUrl" class="val">http://127.0.0.1:8787</span>
+            </div>
+            <div class="row">
+                <span class="label">超时保护 (Timeout)</span>
+                <span id="headroomTimeout" class="val">1500 ms (Fail-open)</span>
+            </div>
+            <div class="row">
+                <span class="label">熔断状态 (Circuit)</span>
+                <span id="headroomCircuit" class="val">closed (导通)</span>
+            </div>
+            <div class="row">
+                <span class="label">最近自检反馈</span>
+                <span id="lastTestTime" class="val">等待测试</span>
+            </div>
+            <div style="margin-top: 16px;">
+                <button id="testBtn" class="btn" onclick="runSelfTest()">
+                    <span>🔄 重新检测 Headroom 与 4 阶段连通性</span>
+                </button>
+            </div>
+            <div id="msgBox" class="msg-box"></div>
+        </div>
+        <div class="card">
+            <div class="card-title">
+                <span>处理链统计指标 (Metrics)</span>
+                <span id="pluginVer" style="font-size:12px; color:var(--text-muted)">v1.0.1</span>
+            </div>
+            <div class="grid">
+                <div class="metric-box">
+                    <div class="metric-label">RTK 工具输出压缩</div>
+                    <div id="mRtk" class="metric-val">0 次</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-label">Headroom 历史压缩</div>
+                    <div id="mHeadroom" class="metric-val">0 次</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-label">Caveman 提示精简</div>
+                    <div id="mCaveman" class="metric-val">0 次</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-label">Ponytail 代码精简</div>
+                    <div id="mPonytail" class="metric-val">0 次</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+        function getKey() {
+            try {
+                const urlParams = new URLSearchParams(window.location.search);
+                if (urlParams.get('key')) return urlParams.get('key');
+                return localStorage.getItem('cpa_management_key') || localStorage.getItem('management_key') || '';
+            } catch (e) {
+                return '';
+            }
+        }
+        async function fetchStatus() {
+            try {
+                const key = getKey();
+                const headers = key ? { Authorization: 'Bearer ' + key } : {};
+                const res = await fetch('/v0/management/plugins/token-saver/status', { headers });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                renderStatus(data);
+            } catch (err) {
+                console.error(err);
+                document.getElementById('headroomBadge').className = 'status-badge status-err';
+                document.getElementById('headroomDot').className = 'dot dot-err';
+                document.getElementById('headroomStatusText').innerText = '未授权或服务未就绪';
+            }
+        }
+        function renderStatus(data) {
+            document.getElementById('pluginVer').innerText = 'v' + (data.build_version || '1.0.1');
+            document.getElementById('pipelineTag').className = data.live ? 'tag tag-active' : 'tag tag-inactive';
+            document.getElementById('pipelineTag').innerText = data.live ? '运行中' : '已停止';
+            const effective = data.headroom_effective;
+            const circuit = data.headroom_circuit || 'unknown';
+            const badge = document.getElementById('headroomBadge');
+            const dot = document.getElementById('headroomDot');
+            const txt = document.getElementById('headroomStatusText');
+            if (effective && circuit === 'closed') {
+                badge.className = 'status-badge status-ok';
+                dot.className = 'dot dot-ok';
+                txt.innerText = '运行中 (已连接)';
+            } else if (circuit === 'open') {
+                badge.className = 'status-badge status-err';
+                dot.className = 'dot dot-err';
+                txt.innerText = '熔断告警 (不可达)';
+            } else {
+                badge.className = 'status-badge status-err';
+                dot.className = 'dot dot-err';
+                txt.innerText = '未启用或降级';
+            }
+            document.getElementById('headroomCircuit').innerText = circuit;
+            if (data.last_self_test_at) {
+                document.getElementById('lastTestTime').innerText = data.last_self_test_result + ' (' + new Date(data.last_self_test_at).toLocaleTimeString() + ')';
+            }
+            const m = data.metrics || {};
+            document.getElementById('mRtk').innerText = (m.rtk?.executed || 0) + ' 次';
+            document.getElementById('mHeadroom').innerText = (m.headroom?.executed || 0) + ' 次';
+            document.getElementById('mCaveman').innerText = (m.caveman?.executed || 0) + ' 次';
+            document.getElementById('mPonytail').innerText = (m.ponytail?.executed || 0) + ' 次';
+        }
+        async function runSelfTest() {
+            const btn = document.getElementById('testBtn');
+            const msg = document.getElementById('msgBox');
+            btn.disabled = true;
+            btn.innerHTML = '<span>⏳ 正在进行全链路探测...</span>';
+            msg.className = 'msg-box';
+            msg.style.display = 'none';
+            const start = performance.now();
+            try {
+                const key = getKey();
+                const headers = { 'Content-Type': 'application/json' };
+                if (key) headers['Authorization'] = 'Bearer ' + key;
+                const res = await fetch('/v0/management/plugins/token-saver/self-test', {
+                    method: 'POST',
+                    headers: headers,
+                    body: '{}'
+                });
+                const elapsed = Math.round(performance.now() - start);
+                const data = await res.json();
+                if (res.ok && data.result === 'passed') {
+                    msg.className = 'msg-box msg-ok';
+                    msg.innerText = '✅ 探测通过！Headroom 与 4 阶段处理链可达（耗时 ' + elapsed + 'ms）。';
+                } else {
+                    msg.className = 'msg-box msg-err';
+                    msg.innerText = '❌ 探测未通过: ' + (data.error || '自检失败') + '（耗时 ' + elapsed + 'ms）。';
+                }
+                await fetchStatus();
+            } catch (err) {
+                msg.className = 'msg-box msg-err';
+                msg.innerText = '❌ 请求异常: ' + err.message;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<span>🔄 重新检测 Headroom 与 4 阶段连通性</span>';
+            }
+        }
+        fetchStatus();
+        setInterval(fetchStatus, 10000);
+    </script>
+</body>
+</html>
