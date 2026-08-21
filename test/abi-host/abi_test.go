@@ -41,7 +41,7 @@ future_field: preserved
 	if registration.SchemaVersion != abi.RPCSchemaVersion {
 		t.Fatalf("schema_version = %d", registration.SchemaVersion)
 	}
-	if registration.Metadata.Name != "Token Saver" || registration.Metadata.Version != "1.0.1" || registration.Metadata.Author != "Mr.King" {
+	if registration.Metadata.Name != "Token Saver" || registration.Metadata.Version != "1.0.2" || registration.Metadata.Author != "Mr.King" {
 		t.Fatalf("metadata = %#v", registration.Metadata)
 	}
 	if !registration.Capabilities.RequestNormalizer || !registration.Capabilities.ManagementAPI {
@@ -118,8 +118,8 @@ future_field: preserved
 	if errDecode := json.Unmarshal(managementEnvelope.Result, &management); errDecode != nil {
 		t.Fatalf("decode management registration: %v", errDecode)
 	}
-	if management.Routes == nil || management.Resources == nil || len(management.Routes) != 2 || len(management.Resources) != 1 {
-		t.Fatalf("management registration = %#v, want two authenticated routes and explicit empty resources", management)
+	if management.Routes == nil || management.Resources == nil || len(management.Routes) != 2 || len(management.Resources) != 2 {
+		t.Fatalf("management registration = %#v, want two authenticated routes and two public resources", management)
 	}
 }
 
@@ -139,6 +139,7 @@ func TestRuntimeManagementUsesRealHostFieldNamesAndBase64Bodies(t *testing.T) {
 		[]byte(`"routes"`), []byte(`"resources"`), []byte(`"Method":"GET"`),
 		[]byte(`"Path":"/plugins/token-saver/status"`), []byte(`"Method":"POST"`),
 		[]byte(`"Path":"/plugins/token-saver/self-test"`),
+		[]byte(`"Path":"/headroom/status"`),
 	} {
 		if !bytes.Contains(registrationEnvelope.Result, want) {
 			t.Errorf("management.register result %s missing %s", registrationEnvelope.Result, want)

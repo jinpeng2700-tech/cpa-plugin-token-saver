@@ -76,6 +76,7 @@ func (handler *Handler) Registration() Registration {
 				Menu:        "Headroom 状态",
 				Description: "查看 Headroom 连通状态、压缩延时与一键自检",
 			},
+			{Path: HeadroomStatusRoute},
 		},
 	}
 }
@@ -110,6 +111,21 @@ func (handler *Handler) Handle(ctx context.Context, request Request) (response R
 			return errorResponse(http.StatusMethodNotAllowed, ErrorMethodNotAllowed, "resource method is not allowed")
 		}
 		return htmlResponse(http.StatusOK, headroomPageHTML)
+	case "/v0/resource/plugins/token-saver" + HeadroomStatusRoute, "/v0/resource/plugins/token-saver/" + HeadroomStatusRoute, HeadroomStatusRoute:
+		if request.Method != http.MethodGet {
+			return errorResponse(http.StatusMethodNotAllowed, ErrorMethodNotAllowed, "resource method is not allowed")
+		}
+		status := handler.status(ctx)
+		return jsonResponse(http.StatusOK, HeadroomStatusDTO{
+			BuildVersion:       status.BuildVersion,
+			Live:               status.Live,
+			HeadroomDesired:    status.HeadroomDesired,
+			HeadroomEffective:  status.HeadroomEffective,
+			HeadroomCircuit:    status.HeadroomCircuit,
+			LastSelfTestAt:     status.LastSelfTestAt,
+			LastSelfTestResult: status.LastSelfTestResult,
+			Metrics:            status.Metrics,
+		})
 	default:
 		return errorResponse(http.StatusNotFound, ErrorRouteNotFound, "management route was not found")
 	}

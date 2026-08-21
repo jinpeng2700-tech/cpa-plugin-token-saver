@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -148,9 +148,9 @@
                 <span class="label">最近自检反馈</span>
                 <span id="lastTestTime" class="val">等待测试</span>
             </div>
-            <div style="margin-top: 16px;">
-                <button id="testBtn" class="btn" onclick="runSelfTest()">
-                    <span>🔄 重新检测 Headroom 与 4 阶段连通性</span>
+                    <div style="margin-top: 16px;">
+                        <button id="testBtn" class="btn" onclick="refreshStatus()">
+                            <span>🔄 重新检测 Headroom 状态</span>
                 </button>
             </div>
             <div id="msgBox" class="msg-box"></div>
@@ -158,7 +158,7 @@
         <div class="card">
             <div class="card-title">
                 <span>处理链统计指标 (Metrics)</span>
-                <span id="pluginVer" style="font-size:12px; color:var(--text-muted)">v1.0.1</span>
+                <span id="pluginVer" style="font-size:12px; color:var(--text-muted)">v1.0.2</span>
             </div>
             <div class="grid">
                 <div class="metric-box">
@@ -181,32 +181,39 @@
         </div>
     </div>
     <script>
-        function getKey() {
+        let statusTimer;
+        async function fetchStatus(showMessage = false) {
             try {
-                const urlParams = new URLSearchParams(window.location.search);
-                if (urlParams.get('key')) return urlParams.get('key');
-                return localStorage.getItem('cpa_management_key') || localStorage.getItem('management_key') || '';
-            } catch (e) {
-                return '';
-            }
-        }
-        async function fetchStatus() {
-            try {
-                const key = getKey();
-                const headers = key ? { Authorization: 'Bearer ' + key } : {};
-                const res = await fetch('/v0/management/plugins/token-saver/status', { headers });
-                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const startedAt = performance.now();
+                const res = await fetch('/v0/resource/plugins/token-saver/headroom/status', { cache: 'no-store' });
+                if (!res.ok) {
+                    if (res.status >= 400 && res.status < 500 && statusTimer) {
+                        clearInterval(statusTimer);
+                        statusTimer = undefined;
+                    }
+                    throw new Error('HTTP ' + res.status);
+                }
                 const data = await res.json();
                 renderStatus(data);
+                if (showMessage) {
+                    const msg = document.getElementById('msgBox');
+                    msg.className = 'msg-box msg-ok';
+                    msg.innerText = '✅ 状态刷新完成（耗时 ' + Math.round(performance.now() - startedAt) + 'ms）。';
+                }
             } catch (err) {
                 console.error(err);
                 document.getElementById('headroomBadge').className = 'status-badge status-err';
                 document.getElementById('headroomDot').className = 'dot dot-err';
-                document.getElementById('headroomStatusText').innerText = '未授权或服务未就绪';
+                document.getElementById('headroomStatusText').innerText = '状态接口不可用';
+                if (showMessage) {
+                    const msg = document.getElementById('msgBox');
+                    msg.className = 'msg-box msg-err';
+                    msg.innerText = '❌ 检测失败: ' + err.message;
+                }
             }
         }
         function renderStatus(data) {
-            document.getElementById('pluginVer').innerText = 'v' + (data.build_version || '1.0.1');
+            document.getElementById('pluginVer').innerText = 'v' + (data.build_version || '1.0.2');
             document.getElementById('pipelineTag').className = data.live ? 'tag tag-active' : 'tag tag-inactive';
             document.getElementById('pipelineTag').innerText = data.live ? '运行中' : '已停止';
             const effective = data.headroom_effective;
@@ -237,43 +244,21 @@
             document.getElementById('mCaveman').innerText = (m.caveman?.executed || 0) + ' 次';
             document.getElementById('mPonytail').innerText = (m.ponytail?.executed || 0) + ' 次';
         }
-        async function runSelfTest() {
+        async function refreshStatus() {
             const btn = document.getElementById('testBtn');
             const msg = document.getElementById('msgBox');
             btn.disabled = true;
-            btn.innerHTML = '<span>⏳ 正在进行全链路探测...</span>';
+            btn.innerHTML = '<span>⏳ 正在检测 Headroom...</span>';
             msg.className = 'msg-box';
-            msg.style.display = 'none';
-            const start = performance.now();
             try {
-                const key = getKey();
-                const headers = { 'Content-Type': 'application/json' };
-                if (key) headers['Authorization'] = 'Bearer ' + key;
-                const res = await fetch('/v0/management/plugins/token-saver/self-test', {
-                    method: 'POST',
-                    headers: headers,
-                    body: '{}'
-                });
-                const elapsed = Math.round(performance.now() - start);
-                const data = await res.json();
-                if (res.ok && data.result === 'passed') {
-                    msg.className = 'msg-box msg-ok';
-                    msg.innerText = '✅ 探测通过！Headroom 与 4 阶段处理链可达（耗时 ' + elapsed + 'ms）。';
-                } else {
-                    msg.className = 'msg-box msg-err';
-                    msg.innerText = '❌ 探测未通过: ' + (data.error || '自检失败') + '（耗时 ' + elapsed + 'ms）。';
-                }
-                await fetchStatus();
-            } catch (err) {
-                msg.className = 'msg-box msg-err';
-                msg.innerText = '❌ 请求异常: ' + err.message;
+                await fetchStatus(true);
             } finally {
                 btn.disabled = false;
-                btn.innerHTML = '<span>🔄 重新检测 Headroom 与 4 阶段连通性</span>';
+                btn.innerHTML = '<span>🔄 重新检测 Headroom 状态</span>';
             }
         }
         fetchStatus();
-        setInterval(fetchStatus, 10000);
+        statusTimer = setInterval(fetchStatus, 30000);
     </script>
 </body>
 </html>

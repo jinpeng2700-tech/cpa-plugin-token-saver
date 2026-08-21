@@ -3,7 +3,7 @@ name: release
 on:
   push:
     tags:
-      - "v1.0.1"
+      - "v1.0.2"
 
 permissions:
   contents: read
@@ -79,9 +79,9 @@ jobs:
         with:
           name: release-dist-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            dist/token-saver-v1.0.1-linux-amd64.so
-            dist/compat-probe-v1.0.1-linux-amd64
-            dist/update-verifier-v1.0.1-linux-amd64
+            dist/token-saver-v1.0.2-linux-amd64.so
+            dist/compat-probe-v1.0.2-linux-amd64
+            dist/update-verifier-v1.0.2-linux-amd64
             dist/GLIBC_REQUIREMENTS.txt
             dist/release-metadata.json
             dist/SHA256SUMS
@@ -267,7 +267,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          test "$GITHUB_REF_NAME" = "v1.0.1"
+          test "$GITHUB_REF_NAME" = "v1.0.2"
           test "$(find dist -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 6
           observed_manifest_sha256=$(sha256sum dist/SHA256SUMS | awk '{print $1}')
           test "$observed_manifest_sha256" = "$EXPECTED_MANIFEST_SHA256"
@@ -301,5 +301,5 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
-            --title "Token Saver v1.0.1" \
+            --title "Token Saver v1.0.2" \
             --notes "Linux amd64 plugin release. ABI 1, RPC 3. See release-metadata.json and GLIBC_REQUIREMENTS.txt."
