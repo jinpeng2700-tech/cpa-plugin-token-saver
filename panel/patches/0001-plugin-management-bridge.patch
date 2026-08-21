@@ -1,13 +1,13 @@
-From 91134dec8fd8d8072aaa26f5eea7860ff7294a9c Mon Sep 17 00:00:00 2001
+From 28137c822f704df62fa939f8384a5fcdb5af5e04 Mon Sep 17 00:00:00 2001
 From: peng <jinpeng2700@gmail.com>
 Date: Fri, 21 Aug 2026 19:07:13 +0800
 Subject: [PATCH] feat(plugins): proxy authenticated iframe capabilities
 
 ---
  src/features/plugins/PluginResourcePage.tsx   |  23 +-
- .../plugins/pluginManagementBridge.ts         | 244 +++++++++
- tests/pluginManagementBridge.test.ts          | 471 ++++++++++++++++++
- 3 files changed, 737 insertions(+), 1 deletion(-)
+ .../plugins/pluginManagementBridge.ts         | 246 +++++++++
+ tests/pluginManagementBridge.test.ts          | 482 ++++++++++++++++++
+ 3 files changed, 750 insertions(+), 1 deletion(-)
  create mode 100644 src/features/plugins/pluginManagementBridge.ts
  create mode 100644 tests/pluginManagementBridge.test.ts
 
@@ -72,11 +72,12 @@ index 051f035..ab62889 100644
            title={resource.label}
 diff --git a/src/features/plugins/pluginManagementBridge.ts b/src/features/plugins/pluginManagementBridge.ts
 new file mode 100644
-index 0000000..124518c
+index 0000000..8212a29
 --- /dev/null
 +++ b/src/features/plugins/pluginManagementBridge.ts
-@@ -0,0 +1,244 @@
+@@ -0,0 +1,246 @@
 +import { isRecord } from '@/utils/helpers';
++import { MANAGEMENT_API_PREFIX } from '@/utils/constants';
 +import { parseApiErrorResponse } from '@/services/api/apiError';
 +import { apiClient as defaultApiClient } from '@/services/api/client';
 +
@@ -173,7 +174,7 @@ index 0000000..124518c
 +  if (typeof path !== 'string') return null;
 +  if (Object.keys(rest).length > 0) return null;
 +
-+  const expectedPrefix = `/v0/management/plugins/${context.pluginId}/`;
++  const expectedPrefix = `${MANAGEMENT_API_PREFIX}/plugins/${context.pluginId}/`;
 +  if (!path.startsWith(expectedPrefix)) return null;
 +  if (path.includes('?') || path.includes('#')) return null;
 +  if (path.includes('..')) return null;
@@ -277,11 +278,12 @@ index 0000000..124518c
 +
 +    inFlightRequestIds.add(request.requestId);
 +    try {
++      const apiPath = request.path.slice(MANAGEMENT_API_PREFIX.length);
 +      let data: unknown;
 +      if (request.method === 'GET') {
-+        data = await client.get(request.path);
++        data = await client.get(apiPath);
 +      } else {
-+        data = await client.post(request.path, request.body);
++        data = await client.post(apiPath, request.body);
 +      }
 +
 +      expectedSource.postMessage(
@@ -322,10 +324,10 @@ index 0000000..124518c
 +};
 diff --git a/tests/pluginManagementBridge.test.ts b/tests/pluginManagementBridge.test.ts
 new file mode 100644
-index 0000000..4279238
+index 0000000..0a72702
 --- /dev/null
 +++ b/tests/pluginManagementBridge.test.ts
-@@ -0,0 +1,471 @@
+@@ -0,0 +1,482 @@
 +import { describe, expect, test } from 'bun:test';
 +import {
 +  createPluginManagementBridge,
@@ -767,12 +769,16 @@ index 0000000..4279238
 +      },
 +    } as unknown as Window;
 +    const mockIframe = { contentWindow: childWindow } as HTMLIFrameElement;
++    const requestedPaths: Array<{ method: string; path: string }> = [];
 +    const mockApiClient = {
 +      get: async (path: string) => {
-+        if (path === '/v0/management/plugins/token-saver/dashboard') return { started_at: '2026-08-21T00:00:00Z', headroom: { enabled: true } };
-+        throw new Error('Not found');
++        requestedPaths.push({ method: 'GET', path });
++        return { started_at: '2026-08-21T00:00:00Z', headroom: { enabled: true } };
 +      },
-+      post: async () => ({ reachable: true }),
++      post: async (path: string) => {
++        requestedPaths.push({ method: 'POST', path });
++        return { reachable: true };
++      },
 +    };
 +    const cleanup = createPluginManagementBridge({
 +      iframe: mockIframe,
@@ -793,6 +799,13 @@ index 0000000..4279238
 +    await new Promise((resolve) => setTimeout(resolve, 20));
 +    expect(messagesSent).toHaveLength(2);
 +    expect(messagesSent[1]).toEqual({ message: { type: 'cpa.plugin.management.response', version: 1, requestId: 'req-1', ok: true, status: 200, data: { started_at: '2026-08-21T00:00:00Z', headroom: { enabled: true } } }, targetOrigin: 'https://panel.example.com' });
++    dispatch({ source: childWindow, origin: 'https://panel.example.com', data: { type: 'cpa.plugin.management.request', version: 1, requestId: 'req-2', pluginId: 'token-saver', method: 'POST', path: '/v0/management/plugins/token-saver/headroom/check' } });
++    await new Promise((resolve) => setTimeout(resolve, 20));
++    expect(messagesSent).toHaveLength(3);
++    expect(requestedPaths).toEqual([
++      { method: 'GET', path: '/plugins/token-saver/dashboard' },
++      { method: 'POST', path: '/plugins/token-saver/headroom/check' },
++    ]);
 +    cleanup();
 +    expect(listeners).toHaveLength(0);
 +  });
