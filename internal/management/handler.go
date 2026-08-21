@@ -15,6 +15,8 @@ import (
 
 var selfTestBody = []byte(`{"messages":[{"role":"user","content":"Verify the local token saver pipeline."}]}`)
 
+const checkCooldown = 2 * time.Second
+
 // Options contains the process-owned dependencies needed by the management
 // projection. ConfigSnapshot must return the runtime's currently published
 // store; it is never serialized directly.
@@ -22,30 +24,41 @@ type Options struct {
 	BuildVersion   string
 	ABIVersion     uint32
 	RPCSchema      uint32
-	Saver          *saver.Service
+	Saver         *saver.Service
 	Now            func() time.Time
 	ConfigSnapshot func() *config.Store
+	HeadroomCheck  HeadroomCheckFunc
 }
 
 // Handler owns only redacted management state.
 type Handler struct {
-	buildVersion   string
+	buildVersion  string
 	abiVersion     uint32
-	rpcSchema      uint32
-	saver          *saver.Service
+	rpcSchema     uint32
+	saver         *saver.Service
 	now            func() time.Time
 	startedAt      time.Time
 	configSnapshot func() *config.Store
+	headroomCheck  HeadroomCheckFunc
 
 	selfTestMu     sync.Mutex
 	lastSelfTestAt *time.Time
 	lastSelfTest   string
+
+	checkMu       sync.Mutex
+	checkInFlight  chan struct{}
+	lastCheckedAt *time.Time
+	lastLatencyMS *uint64
+	lastOutcome   string
 }
 
 // NewHandler creates one process-lifetime management handler.
 func NewHandler(options Options) *Handler {
 	if options.Now == nil {
 		options.Now = time.Now
+	}
+	if options.HeadroomCheck == nil {
+		options.HeadroomCheck = headroom.Check
 	}
 	buildVersion := options.BuildVersion
 	if buildVersion == "" {
@@ -59,7 +72,10 @@ func NewHandler(options Options) *Handler {
 		now:            options.Now,
 		startedAt:      options.Now(),
 		configSnapshot: options.ConfigSnapshot,
+		headroomCheck:  options.HeadroomCheck,
 		lastSelfTest:   SelfTestNever,
+		checkInFlight:  make(chan struct{}, 1),
+		lastOutcome:    HeadroomStatusUnknown,
 	}
 }
 
@@ -69,6 +85,8 @@ func (handler *Handler) Registration() Registration {
 		Routes: []Route{
 			{Method: http.MethodGet, Path: StatusRoute},
 			{Method: http.MethodPost, Path: SelfTestRoute},
+			{Method: http.MethodGet, Path: DashboardRoute},
+			{Method: http.MethodPost, Path: HeadroomCheckRoute},
 		},
 		Resources: []Route{
 			{
@@ -106,6 +124,16 @@ func (handler *Handler) Handle(ctx context.Context, request Request) (response R
 			return errorResponse(http.StatusMethodNotAllowed, ErrorMethodNotAllowed, "management method is not allowed")
 		}
 		return handler.selfTest(ctx)
+	case ManagementBasePath + DashboardRoute:
+		if request.Method != http.MethodGet {
+			return errorResponse(http.StatusMethodNotAllowed, ErrorMethodNotAllowed, "management method is not allowed")
+		}
+		return jsonResponse(http.StatusOK, handler.dashboard())
+	case ManagementBasePath + HeadroomCheckRoute:
+		if request.Method != http.MethodPost {
+			return errorResponse(http.StatusMethodNotAllowed, ErrorMethodNotAllowed, "management method is not allowed")
+		}
+		return handler.check(ctx)
 	case "/v0/resource/plugins/token-saver" + HeadroomPageRoute, "/v0/resource/plugins/token-saver/" + HeadroomPageRoute, HeadroomPageRoute:
 		if request.Method != http.MethodGet {
 			return errorResponse(http.StatusMethodNotAllowed, ErrorMethodNotAllowed, "resource method is not allowed")
@@ -147,6 +175,138 @@ func (handler *Handler) publicHeadroomStatus() HeadroomStatusDTO {
 	return status
 }
 
+func (handler *Handler) dashboard() DashboardDTO {
+	cfg, valid, _ := handler.configuration()
+	metricSnapshot := metrics.Snapshot{StartedAt: handler.startedAt}
+	if handler.saver != nil {
+		if registry := handler.saver.Metrics(); registry != nil {
+			metricSnapshot = registry.Snapshot()
+		}
+	}
+
+	headroomEnabled := valid && cfg.HeadroomEnabled
+	headroomStatus := HeadroomStatusDisabled
+	headroomCircuit := HeadroomCircuitDisabled
+	if headroomEnabled {
+		headroomStatus = HeadroomStatusUnknown
+		headroomCircuit = HeadroomCircuitClosed
+		if handler.saver != nil {
+			snap := handler.saver.HeadroomSnapshot()
+			headroomCircuit = circuitProjection(snap.Circuit)
+			if snap.Observed {
+				if snap.Effective {
+					headroomStatus = HeadroomStatusReady
+				} else {
+					headroomStatus = HeadroomStatusDegraded
+				}
+			}
+		}
+	}
+
+	lastAt, lastLat, lastOut := handler.checkSnapshot()
+
+	return DashboardDTO{
+		StartedAt: metricSnapshot.StartedAt,
+		Headroom: DashboardHeadroomDTO{
+			Enabled:       headroomEnabled,
+			URL:           cfg.HeadroomURL,
+			Status:        headroomStatus,
+			Circuit:       headroomCircuit,
+			LastCheckedAt: lastAt,
+			LastLatencyMS: lastLat,
+			LastOutcome:   lastOut,
+		},
+		Stages: DashboardStagesDTO{
+			RTK:      projectStage(metricSnapshot.Stages.RTK),
+			Headroom: projectStage(metricSnapshot.Stages.Headroom),
+			Caveman:  projectStage(metricSnapshot.Stages.Caveman),
+			Ponytail: projectStage(metricSnapshot.Stages.Ponytail),
+		},
+	}
+}
+
+func projectStage(snap metrics.StageSnapshot) DashboardStageDTO {
+	return DashboardStageDTO{
+		Executed:     snap.Executed,
+		Bypassed:     snap.Bypassed,
+		FailOpen:     snap.FailOpen,
+		Timeout:      snap.Timeout,
+		Saturated:    snap.Saturated,
+		InputBytes:   snap.InputBytes,
+		OutputBytes:  snap.OutputBytes,
+		SavedBytes:   snap.SavedBytes(),
+		DurationNano: snap.DurationNano,
+	}
+}
+
+func (handler *Handler) check(ctx context.Context) Response {
+	cfg, valid, _ := handler.configuration()
+	if !valid || !cfg.HeadroomEnabled {
+		return errorResponse(http.StatusConflict, ErrorConfigInvalid, "headroom is disabled or configuration is invalid")
+	}
+
+	select {
+	case handler.checkInFlight <- struct{}{}:
+		defer func() { <-handler.checkInFlight }()
+	default:
+		return errorResponse(http.StatusTooManyRequests, ErrorRateLimited, "headroom check is already in flight")
+	}
+
+	handler.checkMu.Lock()
+	now := handler.now()
+	if handler.lastCheckedAt != nil && now.Sub(*handler.lastCheckedAt) < checkCooldown {
+		handler.checkMu.Unlock()
+		return errorResponse(http.StatusTooManyRequests, ErrorRateLimited, "headroom check cooldown active")
+	}
+	handler.checkMu.Unlock()
+
+	timeout := time.Duration(cfg.HeadroomTimeoutMS) * time.Millisecond
+	result := handler.headroomCheck(ctx, cfg.HeadroomURL, timeout)
+	latencyMS := uint64(result.Latency.Milliseconds())
+	testedAt := handler.now()
+
+	handler.recordCheck(testedAt, latencyMS, string(result.Outcome))
+
+	status := HeadroomStatusDegraded
+	if result.Reachable {
+		status = HeadroomStatusReady
+	}
+
+	return jsonResponse(http.StatusOK, HeadroomCheckDTO{
+		Reachable: result.Reachable,
+		Status:    status,
+		Outcome:   string(result.Outcome),
+		LatencyMS: latencyMS,
+		TestedAt:  testedAt,
+	})
+}
+
+func (handler *Handler) checkSnapshot() (*time.Time, *uint64, string) {
+	handler.checkMu.Lock()
+	defer handler.checkMu.Unlock()
+	var at *time.Time
+	if handler.lastCheckedAt != nil {
+		copy := *handler.lastCheckedAt
+		at = &copy
+	}
+	var lat *uint64
+	if handler.lastLatencyMS != nil {
+		copy := *handler.lastLatencyMS
+		lat = &copy
+	}
+	return at, lat, handler.lastOutcome
+}
+
+func (handler *Handler) recordCheck(at time.Time, latencyMS uint64, outcome string) {
+	handler.checkMu.Lock()
+	defer handler.checkMu.Unlock()
+	copyAt := at
+	copyLat := latencyMS
+	handler.lastCheckedAt = &copyAt
+	handler.lastLatencyMS = &copyLat
+	handler.lastOutcome = outcome
+}
+
 func (handler *Handler) status(ctx context.Context) StatusDTO {
 	cfg, valid, digest := handler.configuration()
 	metricSnapshot := metrics.Snapshot{StartedAt: handler.startedAt}
@@ -182,7 +342,7 @@ func (handler *Handler) status(ctx context.Context) StatusDTO {
 		FixtureRevision:    FixtureRevision,
 		StartedAt:          metricSnapshot.StartedAt,
 		Live:               handler.saver != nil,
-		Config:             configState,
+		Config:               configState,
 		ConfigGeneration:   handler.generation(),
 		ConfigDigest:       digest,
 		Pipeline:           pipeline,
@@ -190,8 +350,8 @@ func (handler *Handler) status(ctx context.Context) StatusDTO {
 		HeadroomDesired:    cfg.HeadroomEnabled,
 		HeadroomEffective:  headroomEffective,
 		HeadroomCircuit:    headroomCircuit,
-		Current:            metricSnapshot.Current,
-		Previous:           metricSnapshot.Previous,
+		Current:           metricSnapshot.Current,
+		Previous:          metricSnapshot.Previous,
 		LastSelfTestAt:     lastAt,
 		LastSelfTestResult: lastResult,
 		Metrics:            metricSnapshot.Stages,
