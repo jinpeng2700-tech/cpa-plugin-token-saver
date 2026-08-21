@@ -74,8 +74,9 @@ func (handler *Handler) Registration() Registration {
 			{
 				Path:        HeadroomPageRoute,
 				Menu:        "Headroom 状态",
-				Description: "查看 Headroom 连通状态、压缩延时与一键自检",
+				Description: "查看 Headroom 被动健康状态并手动刷新",
 			},
+			{Path: HeadroomStatusRoute},
 		},
 	}
 }
@@ -110,9 +111,40 @@ func (handler *Handler) Handle(ctx context.Context, request Request) (response R
 			return errorResponse(http.StatusMethodNotAllowed, ErrorMethodNotAllowed, "resource method is not allowed")
 		}
 		return htmlResponse(http.StatusOK, headroomPageHTML)
+	case "/v0/resource/plugins/token-saver" + HeadroomStatusRoute, "/v0/resource/plugins/token-saver/" + HeadroomStatusRoute, HeadroomStatusRoute:
+		if request.Method != http.MethodGet {
+			return errorResponse(http.StatusMethodNotAllowed, ErrorMethodNotAllowed, "resource method is not allowed")
+		}
+		return jsonResponse(http.StatusOK, handler.publicHeadroomStatus())
 	default:
 		return errorResponse(http.StatusNotFound, ErrorRouteNotFound, "management route was not found")
 	}
+}
+
+func (handler *Handler) publicHeadroomStatus() HeadroomStatusDTO {
+	cfg, valid, _ := handler.configuration()
+	if !valid || !cfg.HeadroomEnabled {
+		return HeadroomStatusDTO{
+			Enabled: valid && cfg.HeadroomEnabled,
+			Status:  HeadroomStatusDisabled,
+			Circuit: HeadroomCircuitDisabled,
+		}
+	}
+	status := HeadroomStatusDTO{Enabled: true, Status: HeadroomStatusUnknown, Circuit: HeadroomCircuitClosed}
+	if handler.saver == nil {
+		return status
+	}
+	snapshot := handler.saver.HeadroomSnapshot()
+	status.Circuit = circuitProjection(snapshot.Circuit)
+	if !snapshot.Observed {
+		return status
+	}
+	if snapshot.Effective {
+		status.Status = HeadroomStatusReady
+	} else {
+		status.Status = HeadroomStatusDegraded
+	}
+	return status
 }
 
 func (handler *Handler) status(ctx context.Context) StatusDTO {

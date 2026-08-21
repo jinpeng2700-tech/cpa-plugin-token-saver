@@ -2,6 +2,7 @@ package probe
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -61,6 +62,21 @@ func TestRequiredScenariosCoverFullPipeline(t *testing.T) {
 	want := "all-off,rtk,headroom-rewrite,headroom-timeout,caveman,ponytail,fixed-order"
 	if got := strings.Join(requiredScenarios, ","); got != want {
 		t.Fatalf("requiredScenarios = %q, want %q", got, want)
+	}
+}
+
+func TestPublicStatusValidationRequiresExactSafeFields(t *testing.T) {
+	valid := map[string]json.RawMessage{
+		"enabled": json.RawMessage(`false`),
+		"status":  json.RawMessage(`"disabled"`),
+		"circuit": json.RawMessage(`"disabled"`),
+	}
+	if !validPublicStatus(valid, false, "disabled", "disabled") {
+		t.Fatal("valid public status was rejected")
+	}
+	valid["build_version"] = json.RawMessage(`"1.0.2"`)
+	if validPublicStatus(valid, false, "disabled", "disabled") {
+		t.Fatal("public status with extra fingerprint field was accepted")
 	}
 }
 

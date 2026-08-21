@@ -16,15 +16,23 @@ import (
 	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/saver"
 )
 
-func TestRegistrationDeclaresOnlyAuthenticatedManagementRoutes(t *testing.T) {
+func TestRegistrationDeclaresAuthenticatedRoutesAndPublicHeadroomResources(t *testing.T) {
 	handler := NewHandler(Options{})
 	registration := handler.Registration()
 	wantRoutes := []Route{{Method: http.MethodGet, Path: StatusRoute}, {Method: http.MethodPost, Path: SelfTestRoute}}
 	if !reflect.DeepEqual(registration.Routes, wantRoutes) {
 		t.Fatalf("routes = %#v, want %#v", registration.Routes, wantRoutes)
 	}
-	if len(registration.Resources) != 1 || registration.Resources[0].Path != HeadroomPageRoute {
-		t.Fatalf("resources = %#v, want 1 headroom route", registration.Resources)
+	wantResources := []Route{
+		{
+			Path:        HeadroomPageRoute,
+			Menu:        "Headroom 状态",
+			Description: "查看 Headroom 被动健康状态并手动刷新",
+		},
+		{Path: "/headroom/status"},
+	}
+	if !reflect.DeepEqual(registration.Resources, wantResources) {
+		t.Fatalf("resources = %#v, want %#v", registration.Resources, wantResources)
 	}
 	raw, errMarshal := json.Marshal(registration)
 	if errMarshal != nil {
@@ -38,6 +46,86 @@ func TestRegistrationDeclaresOnlyAuthenticatedManagementRoutes(t *testing.T) {
 	for _, forbidden := range []string{`"method"`, `"path"`, `"menu"`, `"Handler"`} {
 		if bytes.Contains(raw, []byte(forbidden)) {
 			t.Errorf("registration %s contains forbidden field %q", raw, forbidden)
+		}
+	}
+}
+
+func TestPublicHeadroomStatusReturnsOnlyDashboardProjection(t *testing.T) {
+	runner := &statusRunner{probe: headroom.OutcomeApplied, circuit: headroom.CircuitClosed}
+	service := saver.NewService(saver.Options{
+		HeadroomFactory: func(config.Config) (saver.HeadroomRunner, func(), error) { return runner, func() {}, nil },
+	})
+	defer service.Close()
+	cfg := config.Defaults()
+	cfg.HeadroomEnabled = true
+	if err := service.Reconfigure(cfg); err != nil {
+		t.Fatal(err)
+	}
+	store, errStore := config.NewStore([]byte("future_credential: TOP_SECRET_SENTINEL\nheadroom_enabled: true\n"))
+	if errStore != nil {
+		t.Fatal(errStore)
+	}
+	handler := NewHandler(Options{
+		BuildVersion:   "test-build",
+		Saver:          service,
+		ConfigSnapshot: func() *config.Store { return store },
+	})
+
+	response := handler.Handle(context.Background(), Request{
+		Method: http.MethodGet,
+		Path:   "/v0/resource/plugins/token-saver/headroom/status",
+	})
+	if response.StatusCode != http.StatusOK || response.Headers.Get("Content-Type") != "application/json" {
+		t.Fatalf("response = %#v", response)
+	}
+	var fields map[string]json.RawMessage
+	if errDecode := json.Unmarshal(response.Body, &fields); errDecode != nil {
+		t.Fatalf("decode public status: %v; body=%s", errDecode, response.Body)
+	}
+	wantFields := []string{"enabled", "status", "circuit"}
+	if len(fields) != len(wantFields) {
+		t.Fatalf("public status fields = %#v, want exactly %v", fields, wantFields)
+	}
+	for _, field := range wantFields {
+		if _, exists := fields[field]; !exists {
+			t.Errorf("public status missing field %q", field)
+		}
+	}
+	for _, forbidden := range []string{
+		"TOP_SECRET_SENTINEL", "config_digest", "config_generation", "started_at",
+		"abi_version", "rpc_schema", "fixture_revision", "build_version",
+		"last_self_test", "metrics", "http://127.0.0.1:8787",
+	} {
+		if bytes.Contains(response.Body, []byte(forbidden)) {
+			t.Errorf("public status leaked %q: %s", forbidden, response.Body)
+		}
+	}
+	if runner.probes.Load() != 0 {
+		t.Fatalf("public status performed %d active probes, want 0", runner.probes.Load())
+	}
+}
+
+func TestHeadroomPageNeverRequestsAuthenticatedManagementRoutes(t *testing.T) {
+	handler := NewHandler(Options{})
+	response := handler.Handle(context.Background(), Request{
+		Method: http.MethodGet,
+		Path:   "/v0/resource/plugins/token-saver/headroom",
+	})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("page response = %d %s", response.StatusCode, response.Body)
+	}
+	body := string(response.Body)
+	if !strings.Contains(body, "/v0/resource/plugins/token-saver/headroom/status") {
+		t.Fatalf("page does not use public status resource: %s", response.Body)
+	}
+	for _, forbidden := range []string{
+		"/v0/management/", "Authorization", "X-Management-Key", "URLSearchParams",
+		"localStorage", "management_key", "managementKey", "setInterval(fetchStatus, 10000)",
+		"msg.style.display = 'none'", "http://127.0.0.1:8787", "build_version",
+		"last_self_test", "data.metrics", "pluginVer", "mRtk", "mHeadroom",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("page contains forbidden authenticated flow %q", forbidden)
 		}
 	}
 }
@@ -333,6 +421,9 @@ func (runner *statusRunner) Probe(context.Context) headroom.Outcome {
 	return runner.probe
 }
 func (runner *statusRunner) CircuitState() headroom.CircuitState { return runner.circuit }
+func (runner *statusRunner) LastOutcome() (headroom.Outcome, bool) {
+	return runner.probe, runner.probe != ""
+}
 
 func decodeStatus(t *testing.T, response Response) StatusDTO {
 	t.Helper()

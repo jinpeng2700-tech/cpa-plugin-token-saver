@@ -92,6 +92,9 @@ type Client struct {
 	probeMu    sync.Mutex
 	probeAt    time.Time
 	probeValue Outcome
+	statusMu   sync.Mutex
+	lastValue  Outcome
+	observed   bool
 }
 
 // Probe performs a small compression-only request and caches the low-cardinality
@@ -134,6 +137,17 @@ func (client *Client) CircuitState() CircuitState {
 		return CircuitOpen
 	}
 	return client.circuit.state(client.now())
+}
+
+// LastOutcome returns the last completed compression result without making a
+// network request or changing circuit state.
+func (client *Client) LastOutcome() (Outcome, bool) {
+	if client == nil {
+		return "", false
+	}
+	client.statusMu.Lock()
+	defer client.statusMu.Unlock()
+	return client.lastValue, client.observed
 }
 
 // NewClient constructs a client bound to one literal loopback base URL. The
@@ -191,10 +205,11 @@ func newClient(baseURL string, timeout time.Duration, options ...clientOption) (
 
 // Compress performs one bounded call. The validator runs before the call is
 // recorded as successful, so semantic invariant failures also feed the circuit.
-func (client *Client) Compress(ctx context.Context, requestBody []byte, validate func([]json.RawMessage) error) Outcome {
+func (client *Client) Compress(ctx context.Context, requestBody []byte, validate func([]json.RawMessage) error) (outcome Outcome) {
 	if client == nil || client.httpClient == nil || client.endpoint == nil {
 		return OutcomeNetwork
 	}
+	defer func() { client.recordOutcome(outcome) }()
 	if len(requestBody) == 0 || len(requestBody) > maxPayloadBytes {
 		return OutcomeRequestTooLarge
 	}
@@ -273,6 +288,13 @@ func (client *Client) Compress(ctx context.Context, requestBody []byte, validate
 	}
 	client.circuit.finish(client.now(), probe, true)
 	return OutcomeApplied
+}
+
+func (client *Client) recordOutcome(outcome Outcome) {
+	client.statusMu.Lock()
+	client.lastValue = outcome
+	client.observed = true
+	client.statusMu.Unlock()
 }
 
 // CloseIdleConnections releases reusable sockets during reconfiguration and

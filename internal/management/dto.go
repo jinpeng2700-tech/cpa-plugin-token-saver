@@ -9,11 +9,12 @@ import (
 )
 
 const (
-	ManagementBasePath = "/v0/management"
-	StatusRoute        = "/plugins/token-saver/status"
-	SelfTestRoute      = "/plugins/token-saver/self-test"
-	HeadroomPageRoute  = "/headroom"
-	FixtureRevision    = "v1"
+	ManagementBasePath  = "/v0/management"
+	StatusRoute         = "/plugins/token-saver/status"
+	SelfTestRoute       = "/plugins/token-saver/self-test"
+	HeadroomPageRoute   = "/headroom"
+	HeadroomStatusRoute = "/headroom/status"
+	FixtureRevision     = "v1"
 )
 
 const (
@@ -31,6 +32,11 @@ const (
 	HeadroomCircuitClosed   = "closed"
 	HeadroomCircuitOpen     = "open"
 	HeadroomCircuitHalfOpen = "half_open"
+
+	HeadroomStatusDisabled = "disabled"
+	HeadroomStatusUnknown  = "unknown"
+	HeadroomStatusReady    = "ready"
+	HeadroomStatusDegraded = "degraded"
 
 	SelfTestNever  = "never"
 	SelfTestPassed = "passed"
@@ -56,8 +62,7 @@ type Route struct {
 	Description string
 }
 
-// Registration is the management.register result. Resources remains an
-// explicit empty list because Token Saver exposes no unauthenticated UI route.
+// Registration is the management.register result.
 type Registration struct {
 	Routes    []Route `json:"routes"`
 	Resources []Route `json:"resources"`
@@ -98,6 +103,15 @@ type StatusDTO struct {
 	LastSelfTestAt     *time.Time                 `json:"last_self_test_at"`
 	LastSelfTestResult string                     `json:"last_self_test_result"`
 	Metrics            metrics.StageProjection    `json:"metrics"`
+}
+
+// HeadroomStatusDTO is the public, read-only projection used by the embedded
+// dashboard. It excludes configuration identity and authenticated management
+// metadata.
+type HeadroomStatusDTO struct {
+	Enabled bool   `json:"enabled"`
+	Status  string `json:"status"`
+	Circuit string `json:"circuit"`
 }
 
 // SelfTestDTO reports only the local pipeline fixture result. It deliberately

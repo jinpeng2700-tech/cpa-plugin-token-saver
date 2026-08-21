@@ -14,6 +14,17 @@ import (
 	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/prompt"
 )
 
+func TestDefaultHeadroomRunnerSupportsPassiveSnapshot(t *testing.T) {
+	runner, closeRunner, err := defaultHeadroomFactory(config.Defaults())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeRunner()
+	if _, ok := runner.(headroomSnapshotRunner); !ok {
+		t.Fatalf("default Headroom runner %T does not expose passive snapshot", runner)
+	}
+}
+
 func TestPipelineRunsEnabledStagesInFixedOrder(t *testing.T) {
 	var order []string
 	stage := func(name string) StageFunc {

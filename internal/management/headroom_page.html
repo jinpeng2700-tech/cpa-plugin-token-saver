@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -98,15 +98,6 @@
         }
         .btn:hover { background: var(--accent-hover); }
         .btn:disabled { opacity: 0.6; cursor: not-allowed; }
-        .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 12px; }
-        .metric-box {
-            background: rgba(255,255,255,0.03);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 12px;
-        }
-        .metric-label { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
-        .metric-val { font-size: 18px; font-weight: 600; color: #fff; }
         .msg-box {
             margin-top: 16px;
             padding: 12px;
@@ -122,7 +113,7 @@
     <div class="container">
         <div class="header">
             <h1>⚡ Token 节省器 (Token Saver)</h1>
-            <span id="pipelineTag" class="tag tag-active">运行中</span>
+            <span id="pipelineTag" class="tag tag-inactive">检测中</span>
         </div>
         <div class="card">
             <div class="card-title">
@@ -133,147 +124,106 @@
                 </div>
             </div>
             <div class="row">
-                <span class="label">代理地址 (URL)</span>
-                <span id="headroomUrl" class="val">http://127.0.0.1:8787</span>
+                <span class="label">配置状态</span>
+                <span id="headroomEnabled" class="val">检测中</span>
             </div>
             <div class="row">
-                <span class="label">超时保护 (Timeout)</span>
-                <span id="headroomTimeout" class="val">1500 ms (Fail-open)</span>
+                <span class="label">被动健康状态</span>
+                <span id="headroomPassiveStatus" class="val">unknown</span>
             </div>
             <div class="row">
                 <span class="label">熔断状态 (Circuit)</span>
-                <span id="headroomCircuit" class="val">closed (导通)</span>
+                <span id="headroomCircuit" class="val">unknown</span>
             </div>
             <div class="row">
-                <span class="label">最近自检反馈</span>
-                <span id="lastTestTime" class="val">等待测试</span>
+                <span class="label">检测方式</span>
+                <span class="val">只读快照，不主动请求 Headroom</span>
             </div>
             <div style="margin-top: 16px;">
-                <button id="testBtn" class="btn" onclick="runSelfTest()">
-                    <span>🔄 重新检测 Headroom 与 4 阶段连通性</span>
+                <button id="testBtn" class="btn" onclick="refreshStatus()">
+                    <span>🔄 刷新状态</span>
                 </button>
             </div>
             <div id="msgBox" class="msg-box"></div>
         </div>
-        <div class="card">
-            <div class="card-title">
-                <span>处理链统计指标 (Metrics)</span>
-                <span id="pluginVer" style="font-size:12px; color:var(--text-muted)">v1.0.1</span>
-            </div>
-            <div class="grid">
-                <div class="metric-box">
-                    <div class="metric-label">RTK 工具输出压缩</div>
-                    <div id="mRtk" class="metric-val">0 次</div>
-                </div>
-                <div class="metric-box">
-                    <div class="metric-label">Headroom 历史压缩</div>
-                    <div id="mHeadroom" class="metric-val">0 次</div>
-                </div>
-                <div class="metric-box">
-                    <div class="metric-label">Caveman 提示精简</div>
-                    <div id="mCaveman" class="metric-val">0 次</div>
-                </div>
-                <div class="metric-box">
-                    <div class="metric-label">Ponytail 代码精简</div>
-                    <div id="mPonytail" class="metric-val">0 次</div>
-                </div>
-            </div>
-        </div>
     </div>
     <script>
-        function getKey() {
+        let statusTimer;
+        async function fetchStatus(showMessage = false) {
             try {
-                const urlParams = new URLSearchParams(window.location.search);
-                if (urlParams.get('key')) return urlParams.get('key');
-                return localStorage.getItem('cpa_management_key') || localStorage.getItem('management_key') || '';
-            } catch (e) {
-                return '';
-            }
-        }
-        async function fetchStatus() {
-            try {
-                const key = getKey();
-                const headers = key ? { Authorization: 'Bearer ' + key } : {};
-                const res = await fetch('/v0/management/plugins/token-saver/status', { headers });
-                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const startedAt = performance.now();
+                const res = await fetch('/v0/resource/plugins/token-saver/headroom/status', { cache: 'no-store' });
+                if (!res.ok) {
+                    if (res.status >= 400 && res.status < 500 && statusTimer) {
+                        clearInterval(statusTimer);
+                        statusTimer = undefined;
+                    }
+                    throw new Error('HTTP ' + res.status);
+                }
                 const data = await res.json();
                 renderStatus(data);
+                if (showMessage) {
+                    const msg = document.getElementById('msgBox');
+                    msg.className = 'msg-box msg-ok';
+                    msg.innerText = '✅ 状态刷新完成（耗时 ' + Math.round(performance.now() - startedAt) + 'ms）。';
+                }
             } catch (err) {
                 console.error(err);
                 document.getElementById('headroomBadge').className = 'status-badge status-err';
                 document.getElementById('headroomDot').className = 'dot dot-err';
-                document.getElementById('headroomStatusText').innerText = '未授权或服务未就绪';
+                document.getElementById('headroomStatusText').innerText = '状态接口不可用';
+                if (showMessage) {
+                    const msg = document.getElementById('msgBox');
+                    msg.className = 'msg-box msg-err';
+                    msg.innerText = '❌ 检测失败: ' + err.message;
+                }
             }
         }
         function renderStatus(data) {
-            document.getElementById('pluginVer').innerText = 'v' + (data.build_version || '1.0.1');
-            document.getElementById('pipelineTag').className = data.live ? 'tag tag-active' : 'tag tag-inactive';
-            document.getElementById('pipelineTag').innerText = data.live ? '运行中' : '已停止';
-            const effective = data.headroom_effective;
-            const circuit = data.headroom_circuit || 'unknown';
+            const enabled = data.enabled === true;
+            const status = data.status || 'unknown';
+            const circuit = data.circuit || 'unknown';
+            document.getElementById('pipelineTag').className = enabled ? 'tag tag-active' : 'tag tag-inactive';
+            document.getElementById('pipelineTag').innerText = enabled ? '已启用' : '未启用';
+            document.getElementById('headroomEnabled').innerText = enabled ? 'enabled' : 'disabled';
+            document.getElementById('headroomPassiveStatus').innerText = status;
             const badge = document.getElementById('headroomBadge');
             const dot = document.getElementById('headroomDot');
             const txt = document.getElementById('headroomStatusText');
-            if (effective && circuit === 'closed') {
+            if (status === 'ready' && circuit === 'closed') {
                 badge.className = 'status-badge status-ok';
                 dot.className = 'dot dot-ok';
-                txt.innerText = '运行中 (已连接)';
-            } else if (circuit === 'open') {
+                txt.innerText = '最近请求正常';
+            } else if (status === 'degraded' || circuit === 'open') {
                 badge.className = 'status-badge status-err';
                 dot.className = 'dot dot-err';
-                txt.innerText = '熔断告警 (不可达)';
+                txt.innerText = '最近请求失败或熔断';
+            } else if (!enabled) {
+                badge.className = 'status-badge status-err';
+                dot.className = 'dot dot-err';
+                txt.innerText = '未启用';
             } else {
                 badge.className = 'status-badge status-err';
                 dot.className = 'dot dot-err';
-                txt.innerText = '未启用或降级';
+                txt.innerText = '尚无请求样本';
             }
             document.getElementById('headroomCircuit').innerText = circuit;
-            if (data.last_self_test_at) {
-                document.getElementById('lastTestTime').innerText = data.last_self_test_result + ' (' + new Date(data.last_self_test_at).toLocaleTimeString() + ')';
-            }
-            const m = data.metrics || {};
-            document.getElementById('mRtk').innerText = (m.rtk?.executed || 0) + ' 次';
-            document.getElementById('mHeadroom').innerText = (m.headroom?.executed || 0) + ' 次';
-            document.getElementById('mCaveman').innerText = (m.caveman?.executed || 0) + ' 次';
-            document.getElementById('mPonytail').innerText = (m.ponytail?.executed || 0) + ' 次';
         }
-        async function runSelfTest() {
+        async function refreshStatus() {
             const btn = document.getElementById('testBtn');
             const msg = document.getElementById('msgBox');
             btn.disabled = true;
-            btn.innerHTML = '<span>⏳ 正在进行全链路探测...</span>';
+            btn.innerHTML = '<span>⏳ 正在刷新...</span>';
             msg.className = 'msg-box';
-            msg.style.display = 'none';
-            const start = performance.now();
             try {
-                const key = getKey();
-                const headers = { 'Content-Type': 'application/json' };
-                if (key) headers['Authorization'] = 'Bearer ' + key;
-                const res = await fetch('/v0/management/plugins/token-saver/self-test', {
-                    method: 'POST',
-                    headers: headers,
-                    body: '{}'
-                });
-                const elapsed = Math.round(performance.now() - start);
-                const data = await res.json();
-                if (res.ok && data.result === 'passed') {
-                    msg.className = 'msg-box msg-ok';
-                    msg.innerText = '✅ 探测通过！Headroom 与 4 阶段处理链可达（耗时 ' + elapsed + 'ms）。';
-                } else {
-                    msg.className = 'msg-box msg-err';
-                    msg.innerText = '❌ 探测未通过: ' + (data.error || '自检失败') + '（耗时 ' + elapsed + 'ms）。';
-                }
-                await fetchStatus();
-            } catch (err) {
-                msg.className = 'msg-box msg-err';
-                msg.innerText = '❌ 请求异常: ' + err.message;
+                await fetchStatus(true);
             } finally {
                 btn.disabled = false;
-                btn.innerHTML = '<span>🔄 重新检测 Headroom 与 4 阶段连通性</span>';
+                btn.innerHTML = '<span>🔄 刷新状态</span>';
             }
         }
         fetchStatus();
-        setInterval(fetchStatus, 10000);
+        statusTimer = setInterval(fetchStatus, 30000);
     </script>
 </body>
 </html>

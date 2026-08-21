@@ -1068,9 +1068,9 @@ func TestReleaseWorkflowUsesFreshImmutableBuildArtifact(t *testing.T) {
 	}
 	uploadPath := workflowValue(upload.With, "path")
 	for _, want := range []string{
-		"token-saver-v1.0.1-linux-amd64.so",
-		"compat-probe-v1.0.1-linux-amd64",
-		"update-verifier-v1.0.1-linux-amd64",
+		"token-saver-v1.0.2-linux-amd64.so",
+		"compat-probe-v1.0.2-linux-amd64",
+		"update-verifier-v1.0.2-linux-amd64",
 		"GLIBC_REQUIREMENTS.txt",
 		"release-metadata.json",
 		"SHA256SUMS",
@@ -1175,7 +1175,7 @@ func TestPromotionSelectionChoosesHighestStableSemVerAndLocksAssetIdentity(t *te
 	}
 	plugin := []promotionRelease{
 		pluginReleaseFixture(200, "v1.0.0"),
-		pluginReleaseFixture(201, "v1.0.1"),
+		pluginReleaseFixture(201, "v1.0.2"),
 		{ID: 202, TagName: "v1.1.0", Prerelease: true},
 	}
 
@@ -1183,7 +1183,7 @@ func TestPromotionSelectionChoosesHighestStableSemVerAndLocksAssetIdentity(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if selection.Official.Tag != "v7.2.10" || selection.Plugin.Tag != "v1.0.1" {
+	if selection.Official.Tag != "v7.2.10" || selection.Plugin.Tag != "v1.0.2" {
 		t.Fatalf("selected tags = %s and %s", selection.Official.Tag, selection.Plugin.Tag)
 	}
 	officialAsset := selection.Official.Assets["archive"]
@@ -1192,7 +1192,7 @@ func TestPromotionSelectionChoosesHighestStableSemVerAndLocksAssetIdentity(t *te
 		t.Fatalf("official asset identity was not locked: %#v", officialAsset)
 	}
 	pluginAsset := selection.Plugin.Assets["plugin"]
-	if pluginAsset.ID != 2011 || pluginAsset.Name != "token-saver-v1.0.1-linux-amd64.so" ||
+	if pluginAsset.ID != 2011 || pluginAsset.Name != "token-saver-v1.0.2-linux-amd64.so" ||
 		pluginAsset.Size != 20101 || pluginAsset.Digest != "sha256:"+strings.Repeat("c", 64) {
 		t.Fatalf("plugin asset identity was not locked: %#v", pluginAsset)
 	}
@@ -1200,7 +1200,7 @@ func TestPromotionSelectionChoosesHighestStableSemVerAndLocksAssetIdentity(t *te
 
 func TestPromotionSelectionFailsClosed(t *testing.T) {
 	validOfficial := officialReleaseFixture(100, "v7.2.10")
-	validPlugin := pluginReleaseFixture(200, "v1.0.1")
+	validPlugin := pluginReleaseFixture(200, "v1.0.2")
 	tests := []struct {
 		name     string
 		official promotionRelease
@@ -1222,7 +1222,7 @@ func TestPromotionSelectionFailsClosed(t *testing.T) {
 			name:     "official downgrade",
 			official: validOfficial,
 			plugin:   validPlugin,
-			previous: approvedManifestFixture("7.2.11", "1.0.1", 3, strings.Repeat("1", 64)),
+			previous: approvedManifestFixture("7.2.11", "1.0.2", 3, strings.Repeat("1", 64)),
 		},
 		{
 			name:     "plugin downgrade",
@@ -1246,7 +1246,7 @@ func TestPromotionSelectionFailsClosed(t *testing.T) {
 }
 
 func TestApprovedManifestStrictParserAcceptsCanonicalFixture(t *testing.T) {
-	want := approvedManifestFixture("7.2.137", "1.0.1", 4, "")
+	want := approvedManifestFixture("7.2.137", "1.0.2", 4, "")
 	raw := marshalApprovedManifest(t, want)
 	got, err := validateApprovedManifest(raw)
 	if err != nil {
@@ -1259,20 +1259,20 @@ func TestApprovedManifestStrictParserAcceptsCanonicalFixture(t *testing.T) {
 }
 
 func TestApprovedManifestRejectsAmbiguousOrUnsafeJSON(t *testing.T) {
-	valid := string(marshalApprovedManifest(t, approvedManifestFixture("7.2.137", "1.0.1", 4, "")))
+	valid := string(marshalApprovedManifest(t, approvedManifestFixture("7.2.137", "1.0.2", 4, "")))
 	tests := []struct {
 		name string
 		raw  string
 	}{
 		{name: "duplicate key", raw: strings.Replace(valid, `"schema_version":1`, `"schema_version":1,"schema_version":1`, 1)},
 		{name: "unknown field", raw: strings.Replace(valid, `"verifier_schema":1`, `"verifier_schema":1,"unknown":true`, 1)},
-		{name: "noncanonical version", raw: strings.Replace(valid, `"version":"1.0.1"`, `"version":"01.0.1"`, 1)},
+		{name: "noncanonical version", raw: strings.Replace(valid, `"version":"1.0.2"`, `"version":"01.0.2"`, 1)},
 		{name: "overflow", raw: strings.Replace(valid, `"channel_generation":4`, `"channel_generation":18446744073709551616`, 1)},
-		{name: "control artifact name", raw: strings.Replace(valid, `"name":"token-saver-v1.0.1-linux-amd64.so"`, `"name":"token-saver-\u0001.so"`, 1)},
-		{name: "path-like artifact name", raw: strings.Replace(valid, `"name":"token-saver-v1.0.1-linux-amd64.so"`, `"name":"../token-saver.so"`, 1)},
+		{name: "control artifact name", raw: strings.Replace(valid, `"name":"token-saver-v1.0.2-linux-amd64.so"`, `"name":"token-saver-\u0001.so"`, 1)},
+		{name: "path-like artifact name", raw: strings.Replace(valid, `"name":"token-saver-v1.0.2-linux-amd64.so"`, `"name":"../token-saver.so"`, 1)},
 		{name: "wrong official repository", raw: strings.Replace(valid, `"repository":"router-for-me/CLIProxyAPI"`, `"repository":"attacker/CLIProxyAPI"`, 1)},
 		{name: "wrong plugin workflow", raw: strings.Replace(valid, `"workflow":".github/workflows/release.yml"`, `"workflow":".github/workflows/other.yml"`, 1)},
-		{name: "wrong plugin ref", raw: strings.Replace(valid, `"ref":"refs/tags/v1.0.1"`, `"ref":"refs/heads/main"`, 1)},
+		{name: "wrong plugin ref", raw: strings.Replace(valid, `"ref":"refs/tags/v1.0.2"`, `"ref":"refs/heads/main"`, 1)},
 		{name: "missing attestation", raw: strings.Replace(valid, `"issuer":"https://token.actions.githubusercontent.com"`, `"issuer":""`, 1)},
 		{name: "missing checksum identity", raw: strings.Replace(valid, `"name":"checksums.txt"`, `"name":""`, 1)},
 		{name: "trailing JSON", raw: valid + `{}`},
@@ -1361,7 +1361,7 @@ func TestPromotionLocksBytesBeforeCompatibility(t *testing.T) {
 
 	selection, err := selectPromotionCandidates(
 		marshalPromotionFixture(t, []promotionRelease{officialReleaseFixture(7137, "v7.2.137")}),
-		marshalPromotionFixture(t, []promotionRelease{pluginReleaseFixture(101, "v1.0.1")}),
+		marshalPromotionFixture(t, []promotionRelease{pluginReleaseFixture(101, "v1.0.2")}),
 		nil,
 	)
 	if err != nil {
@@ -1372,7 +1372,7 @@ func TestPromotionLocksBytesBeforeCompatibility(t *testing.T) {
 	setLockedAsset(t, &selection.Plugin, "probe", paths.Probe)
 	writePromotionFile(t, paths.OfficialChecksums, fileSHA256(t, paths.OfficialArchive)+"  "+selection.Official.Assets["archive"].Name+"\n")
 	setLockedAsset(t, &selection.Official, "checksums", paths.OfficialChecksums)
-	writePromotionFile(t, paths.PluginMetadata, `{"version":"1.0.1","tag":"v1.0.1","source_commit":"`+strings.Repeat("d", 40)+`","platform":"linux-amd64","abi":1,"rpc":3,"glibc_max":"2.32"}`)
+	writePromotionFile(t, paths.PluginMetadata, `{"version":"1.0.2","tag":"v1.0.2","source_commit":"`+strings.Repeat("d", 40)+`","platform":"linux-amd64","abi":1,"rpc":3,"glibc_max":"2.32"}`)
 	setLockedAsset(t, &selection.Plugin, "metadata", paths.PluginMetadata)
 	writePromotionFile(t, paths.PluginChecksums,
 		fileSHA256(t, paths.Probe)+"  "+selection.Plugin.Assets["probe"].Name+"\n"+
@@ -1395,10 +1395,10 @@ func TestPromotionLocksBytesBeforeCompatibility(t *testing.T) {
 }
 
 func TestPromotionGenerationIsMonotonicAndDuplicateConverges(t *testing.T) {
-	locked := promotionLockedFixture(t, "7.2.138", "1.0.1")
+	locked := promotionLockedFixture(t, "7.2.138", "1.0.2")
 	pluginReport := validPromotionPluginReport()
 	coreReport := promotionProbeReport{SchemaVersion: 1, Compatible: true, Code: "ok"}
-	previous := approvedManifestFixture("7.2.137", "1.0.1", 4, "")
+	previous := approvedManifestFixture("7.2.137", "1.0.2", 4, "")
 
 	result, err := buildPromotionResult(locked, pluginReport, coreReport, previous, strings.Repeat("2", 40))
 	if err != nil {
@@ -1423,7 +1423,7 @@ func TestPromotionGenerationIsMonotonicAndDuplicateConverges(t *testing.T) {
 }
 
 func TestPromotionCompatibilityFailureProducesNoManifest(t *testing.T) {
-	locked := promotionLockedFixture(t, "7.2.138", "1.0.1")
+	locked := promotionLockedFixture(t, "7.2.138", "1.0.2")
 	failed := validPromotionPluginReport()
 	failed.Compatible = false
 	failed.Code = "self_test_failed"

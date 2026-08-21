@@ -17,6 +17,20 @@ import (
 
 var validCompressRequest = []byte(`{"messages":[{"role":"user","content":"hello"}],"model":"test-model"}`)
 
+func TestClientLastOutcomeIsPassiveSnapshot(t *testing.T) {
+	client := mustClient(t, "http://127.0.0.1:8787", time.Second)
+	client.httpClient.Transport = staticResponse(http.StatusOK, "", `{"messages":[{"role":"user","content":"hello"}]}`)
+	if _, observed := client.LastOutcome(); observed {
+		t.Fatal("new client unexpectedly reports an observed outcome")
+	}
+	if got := client.Compress(context.Background(), validCompressRequest, acceptAnyMessages); got != OutcomeApplied {
+		t.Fatalf("Compress() = %q, want %q", got, OutcomeApplied)
+	}
+	if outcome, observed := client.LastOutcome(); !observed || outcome != OutcomeApplied {
+		t.Fatalf("LastOutcome() = %q, %v; want %q, true", outcome, observed, OutcomeApplied)
+	}
+}
+
 func TestNewClientRejectsUnsafeEndpointsAndTimeouts(t *testing.T) {
 	t.Parallel()
 
