@@ -297,7 +297,7 @@ class Reconciler:
             # 4. Download Panel management.html
             panel_asset = panel["asset"]
             panel_url = f"https://github.com/{panel['repository']}/releases/download/{panel['tag']}/{panel_asset['name']}"
-            target_panel = temp_stage / "management.html"
+            target_panel = temp_stage / "static" / "management.html"
             self.downloader(panel_url, target_panel, panel_asset["sha256"], panel_asset.get("size"))
             if os.name != "nt":
                 os.chmod(target_panel, 0o600)
@@ -316,6 +316,7 @@ class Reconciler:
             # Write manifest & version
             (temp_stage / "approved-manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             (temp_stage / "version.txt").write_text(f"{official.get('version', official.get('tag'))}\n", encoding="utf-8")
+            (temp_stage / "state").symlink_to(self.state_dir, target_is_directory=True)
 
             # Move temp_stage to final staged_dir
             if staged_dir.exists():

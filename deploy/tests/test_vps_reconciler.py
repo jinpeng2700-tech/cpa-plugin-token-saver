@@ -164,7 +164,7 @@ class TestVPSReconciler(unittest.TestCase):
         new_active = self.active_link.resolve()
         self.assertTrue(new_active.exists())
         self.assertIn("panel-v1.22.6-bridge.1", new_active.name)
-        panel_file = new_active / "management.html"
+        panel_file = new_active / "static" / "management.html"
         self.assertTrue(panel_file.is_file())
         self.assertEqual(panel_file.read_bytes(), self.panel_bytes)
         if os.name != "nt":
@@ -283,7 +283,7 @@ class TestVPSReconciler(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             reconciler.reconcile(manifest_v1)
-    def test_state_directory_never_removed_or_copied(self):
+    def test_state_directory_is_linked_without_copying(self):
         self.create_initial_deployment("dep-initial")
         urls = {
             "https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.2.137/CLIProxyAPI_7.2.137_linux_amd64.tar.gz": self.tar_gz_bytes,
@@ -309,7 +309,9 @@ class TestVPSReconciler(unittest.TestCase):
         self.assertTrue((self.state_dir / "auth" / "session.json").is_file())
         self.assertTrue((self.state_dir / "logs" / "cliproxyapi.log").is_file())
         new_active = self.active_link.resolve()
-        self.assertFalse((new_active / "state").exists())
+        state_link = new_active / "state"
+        self.assertTrue(state_link.is_symlink())
+        self.assertEqual(state_link.resolve(), self.state_dir.resolve())
         self.assertFalse((new_active / "auth").exists())
         self.assertFalse((new_active / "logs").exists())
     def test_active_and_previous_deployments_never_deleted(self):
