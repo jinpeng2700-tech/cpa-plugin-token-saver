@@ -1440,8 +1440,17 @@ func TestPanelReleaseWorkflowIsScheduledManualReadOnlyAndAttested(t *testing.T) 
 	if !ok || workflowValue(entry, "cron") != "43 */6 * * *" {
 		t.Fatalf("panel release cron = %q, want 43 */6 * * *", workflowValue(entry, "cron"))
 	}
-	if _, ok := workflow.On["workflow_dispatch"]; !ok {
+	dispatch, ok := workflow.On["workflow_dispatch"].(map[string]any)
+	if !ok {
 		t.Fatal("panel release workflow missing workflow_dispatch trigger")
+	}
+	inputs, ok := dispatch["inputs"].(map[string]any)
+	if !ok {
+		t.Fatal("panel release workflow_dispatch missing inputs")
+	}
+	revision, ok := inputs["bridge_revision"].(map[string]any)
+	if !ok || workflowValue(revision, "default") != "1" || workflowValue(revision, "required") != "false" {
+		t.Fatalf("panel bridge_revision input = %#v, want optional default 1", revision)
 	}
 
 	if workflow.Permissions["contents"] != "read" {
@@ -1483,6 +1492,8 @@ func TestPanelReleaseWorkflowIsScheduledManualReadOnlyAndAttested(t *testing.T) 
 	buildRun := joinedRun(build)
 	for _, want := range []string{
 		"gh api --paginate --slurp repos/router-for-me/Cli-Proxy-API-Management-Center/releases",
+		`[[ "$BRIDGE_REVISION" =~ ^[1-9][0-9]*$ ]]`,
+		`release_tag="panel-${UPSTREAM_TAG}-bridge.${BRIDGE_REVISION}"`,
 		"panel/build-panel.py",
 		"management.html",
 		"management.html.sha256",

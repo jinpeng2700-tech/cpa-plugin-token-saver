@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: "43 */6 * * *"
   workflow_dispatch:
+    inputs:
+      bridge_revision:
+        description: Immutable bridge patch revision for the selected upstream panel
+        required: false
+        default: "1"
+        type: string
 
 permissions:
   contents: read
@@ -51,9 +57,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           UPSTREAM_TAG: ${{ steps.select.outputs.tag }}
+          BRIDGE_REVISION: ${{ inputs.bridge_revision || '1' }}
         run: |
           set -euo pipefail
-          release_tag="panel-${UPSTREAM_TAG}-bridge.1"
+          if ! [[ "$BRIDGE_REVISION" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Invalid bridge revision: $BRIDGE_REVISION" >&2
+            exit 1
+          fi
+          release_tag="panel-${UPSTREAM_TAG}-bridge.${BRIDGE_REVISION}"
           echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
           if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $release_tag already exists; skipping build"
