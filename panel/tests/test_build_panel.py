@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 # ponytail: minimal fixture runner for unit testing build_panel logic
 
@@ -143,6 +144,35 @@ class TestBuildPanel(unittest.TestCase):
             )
 
         self.assertEqual(installed, [], "Must fail before running bun install")
+
+    def test_patch_apply_does_not_require_global_git_identity(self):
+        builder = importlib.import_module("panel.build-panel")
+        empty_global_config = self.root / "empty.gitconfig"
+        empty_global_config.write_text("", encoding="utf-8")
+
+        fake_html = "<!DOCTYPE html><html><body><script>1</script></body></html>"
+
+        def mock_bun_runner(cwd: Path, cmd: list[str]):
+            if cmd == ["bun", "run", "build"]:
+                dist = cwd / "dist"
+                dist.mkdir(parents=True, exist_ok=True)
+                (dist / "index.html").write_text(fake_html, encoding="utf-8")
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "GIT_CONFIG_GLOBAL": str(empty_global_config),
+                "GIT_CONFIG_NOSYSTEM": "1",
+            },
+        ):
+            builder.build(
+                upstream_tag="v1.22.6",
+                output_dir=self.output_dir,
+                clone_url=str(self.repo_dir),
+                patch_file=self.patch_file,
+                runner=mock_bun_runner,
+                allow_custom_upstream=True,
+            )
 
     def test_non_reproducible_build_hashes_fail(self):
         builder = importlib.import_module("panel.build-panel")

@@ -96,7 +96,12 @@ def build(
         # 3. Apply patch with git am --3way
         patch_abs = patch_file.resolve()
         subprocess.run(
-            ['git', 'am', '--3way', str(patch_abs)],
+            [
+                'git',
+                '-c', 'user.name=CLIProxyAPI Panel Builder',
+                '-c', 'user.email=panel-builder@localhost',
+                'am', '--3way', str(patch_abs),
+            ],
             cwd=str(repo_dir),
             check=True,
             capture_output=True,
