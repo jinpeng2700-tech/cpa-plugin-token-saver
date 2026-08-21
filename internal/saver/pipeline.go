@@ -518,6 +518,10 @@ func (runner adapterRunner) CircuitState() headroom.CircuitState {
 	return runner.client.CircuitState()
 }
 
+func (runner adapterRunner) LastOutcome() (headroom.Outcome, bool) {
+	return runner.client.LastOutcome()
+}
+
 func defaultHeadroomFactory(cfg config.Config) (HeadroomRunner, func(), error) {
 	client, errClient := headroom.NewClient(cfg.HeadroomURL, time.Duration(cfg.HeadroomTimeoutMS)*time.Millisecond)
 	if errClient != nil {
