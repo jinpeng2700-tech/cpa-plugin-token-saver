@@ -228,7 +228,7 @@ jobs:
       - name: Validate final publication bytes
         run: |
           set -euo pipefail
-          PROMOTION_COMMAND=validate MANIFEST_INPUT=dist/approved-release.json \
+          PROMOTION_COMMAND=validate MANIFEST_INPUT="$PWD/dist/approved-release.json" \
             go test -count=1 -run '^TestPromotionCommand$' ./deploy/tests
       - name: Refuse conflicting duplicate
         id: duplicate
