@@ -170,6 +170,11 @@ func Run(parent context.Context, options Options) Report {
 	if pluginState.Version != RequiredVersion {
 		return failure(CodePluginVersion)
 	}
+	var publicStatus map[string]json.RawMessage
+	if outcome := jsonRequest(ctx, client, http.MethodGet, baseURL+"/v0/resource/plugins/token-saver/headroom/status", "", nil, &publicStatus); outcome != httpOK ||
+		!validPublicStatus(publicStatus, false, "disabled", "disabled") {
+		return failure(CodePublicStatus)
+	}
 
 	statusURL := baseURL + "/v0/management/plugins/token-saver/status"
 	var initialStatus managementStatus
@@ -196,6 +201,11 @@ func Run(parent context.Context, options Options) Report {
 			Scenarios:      scenarios,
 			FailedScenario: failedScenario,
 		}
+	}
+	publicStatus = nil
+	if outcome := jsonRequest(ctx, client, http.MethodGet, baseURL+"/v0/resource/plugins/token-saver/headroom/status", "", nil, &publicStatus); outcome != httpOK ||
+		!validPublicStatus(publicStatus, true, "ready", "closed") {
+		return failure(CodePublicStatus)
 	}
 
 	var selfTest selfTestResponse
@@ -651,7 +661,9 @@ func jsonRequest(ctx context.Context, client *http.Client, method, endpoint, cre
 	if errRequest != nil {
 		return httpFailed
 	}
-	request.Header.Set("Authorization", "Bearer "+credential)
+	if credential != "" {
+		request.Header.Set("Authorization", "Bearer "+credential)
+	}
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
@@ -676,6 +688,26 @@ func jsonRequest(ctx context.Context, client *http.Client, method, endpoint, cre
 		return httpFailed
 	}
 	return httpOK
+}
+
+func validPublicStatus(fields map[string]json.RawMessage, enabled bool, status, circuit string) bool {
+	if len(fields) != 3 {
+		return false
+	}
+	var observed struct {
+		Enabled bool   `json:"enabled"`
+		Status  string `json:"status"`
+		Circuit string `json:"circuit"`
+	}
+	raw, errMarshal := json.Marshal(fields)
+	return errMarshal == nil &&
+		json.Unmarshal(raw, &observed) == nil &&
+		observed.Enabled == enabled &&
+		observed.Status == status &&
+		observed.Circuit == circuit &&
+		fields["enabled"] != nil &&
+		fields["status"] != nil &&
+		fields["circuit"] != nil
 }
 
 func httpCode(outcome httpOutcome, fallback string) string {

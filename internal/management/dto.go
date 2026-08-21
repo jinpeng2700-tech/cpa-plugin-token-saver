@@ -33,6 +33,11 @@ const (
 	HeadroomCircuitOpen     = "open"
 	HeadroomCircuitHalfOpen = "half_open"
 
+	HeadroomStatusDisabled = "disabled"
+	HeadroomStatusUnknown  = "unknown"
+	HeadroomStatusReady    = "ready"
+	HeadroomStatusDegraded = "degraded"
+
 	SelfTestNever  = "never"
 	SelfTestPassed = "passed"
 	SelfTestFailed = "failed"
@@ -104,14 +109,9 @@ type StatusDTO struct {
 // dashboard. It excludes configuration identity and authenticated management
 // metadata.
 type HeadroomStatusDTO struct {
-	BuildVersion       string                  `json:"build_version"`
-	Live               bool                    `json:"live"`
-	HeadroomDesired    bool                    `json:"headroom_desired"`
-	HeadroomEffective  bool                    `json:"headroom_effective"`
-	HeadroomCircuit    string                  `json:"headroom_circuit"`
-	LastSelfTestAt     *time.Time              `json:"last_self_test_at"`
-	LastSelfTestResult string                  `json:"last_self_test_result"`
-	Metrics            metrics.StageProjection `json:"metrics"`
+	Enabled bool   `json:"enabled"`
+	Status  string `json:"status"`
+	Circuit string `json:"circuit"`
 }
 
 // SelfTestDTO reports only the local pipeline fixture result. It deliberately

@@ -35,6 +35,7 @@ const (
 	CodePluginNotRegistered = "plugin_not_registered"
 	CodePluginNotEffective  = "plugin_not_effective"
 	CodePluginVersion       = "plugin_version_mismatch"
+	CodePublicStatus        = "public_status_failed"
 	CodeStatus              = "plugin_status_failed"
 	CodePluginABI           = "plugin_abi_mismatch"
 	CodePluginRPC           = "plugin_rpc_mismatch"

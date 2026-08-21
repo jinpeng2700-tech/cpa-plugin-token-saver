@@ -27,7 +27,7 @@ func TestRegistrationDeclaresAuthenticatedRoutesAndPublicHeadroomResources(t *te
 		{
 			Path:        HeadroomPageRoute,
 			Menu:        "Headroom 状态",
-			Description: "查看 Headroom 连通状态、压缩延时与一键自检",
+			Description: "查看 Headroom 被动健康状态并手动刷新",
 		},
 		{Path: "/headroom/status"},
 	}
@@ -51,12 +51,17 @@ func TestRegistrationDeclaresAuthenticatedRoutesAndPublicHeadroomResources(t *te
 }
 
 func TestPublicHeadroomStatusReturnsOnlyDashboardProjection(t *testing.T) {
-	service := saver.NewService(saver.Options{})
+	runner := &statusRunner{probe: headroom.OutcomeApplied, circuit: headroom.CircuitClosed}
+	service := saver.NewService(saver.Options{
+		HeadroomFactory: func(config.Config) (saver.HeadroomRunner, func(), error) { return runner, func() {}, nil },
+	})
 	defer service.Close()
-	if err := service.Reconfigure(config.Defaults()); err != nil {
+	cfg := config.Defaults()
+	cfg.HeadroomEnabled = true
+	if err := service.Reconfigure(cfg); err != nil {
 		t.Fatal(err)
 	}
-	store, errStore := config.NewStore([]byte("future_credential: TOP_SECRET_SENTINEL\n"))
+	store, errStore := config.NewStore([]byte("future_credential: TOP_SECRET_SENTINEL\nheadroom_enabled: true\n"))
 	if errStore != nil {
 		t.Fatal(errStore)
 	}
@@ -77,10 +82,7 @@ func TestPublicHeadroomStatusReturnsOnlyDashboardProjection(t *testing.T) {
 	if errDecode := json.Unmarshal(response.Body, &fields); errDecode != nil {
 		t.Fatalf("decode public status: %v; body=%s", errDecode, response.Body)
 	}
-	wantFields := []string{
-		"build_version", "live", "headroom_desired", "headroom_effective",
-		"headroom_circuit", "last_self_test_at", "last_self_test_result", "metrics",
-	}
+	wantFields := []string{"enabled", "status", "circuit"}
 	if len(fields) != len(wantFields) {
 		t.Fatalf("public status fields = %#v, want exactly %v", fields, wantFields)
 	}
@@ -91,11 +93,15 @@ func TestPublicHeadroomStatusReturnsOnlyDashboardProjection(t *testing.T) {
 	}
 	for _, forbidden := range []string{
 		"TOP_SECRET_SENTINEL", "config_digest", "config_generation", "started_at",
-		"abi_version", "rpc_schema", "fixture_revision",
+		"abi_version", "rpc_schema", "fixture_revision", "build_version",
+		"last_self_test", "metrics", "http://127.0.0.1:8787",
 	} {
 		if bytes.Contains(response.Body, []byte(forbidden)) {
 			t.Errorf("public status leaked %q: %s", forbidden, response.Body)
 		}
+	}
+	if runner.probes.Load() != 0 {
+		t.Fatalf("public status performed %d active probes, want 0", runner.probes.Load())
 	}
 }
 
@@ -115,7 +121,8 @@ func TestHeadroomPageNeverRequestsAuthenticatedManagementRoutes(t *testing.T) {
 	for _, forbidden := range []string{
 		"/v0/management/", "Authorization", "X-Management-Key", "URLSearchParams",
 		"localStorage", "management_key", "managementKey", "setInterval(fetchStatus, 10000)",
-		"msg.style.display = 'none'",
+		"msg.style.display = 'none'", "http://127.0.0.1:8787", "build_version",
+		"last_self_test", "data.metrics", "pluginVer", "mRtk", "mHeadroom",
 	} {
 		if strings.Contains(body, forbidden) {
 			t.Errorf("page contains forbidden authenticated flow %q", forbidden)
@@ -414,6 +421,9 @@ func (runner *statusRunner) Probe(context.Context) headroom.Outcome {
 	return runner.probe
 }
 func (runner *statusRunner) CircuitState() headroom.CircuitState { return runner.circuit }
+func (runner *statusRunner) LastOutcome() (headroom.Outcome, bool) {
+	return runner.probe, runner.probe != ""
+}
 
 func decodeStatus(t *testing.T, response Response) StatusDTO {
 	t.Helper()

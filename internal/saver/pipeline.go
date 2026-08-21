@@ -42,8 +42,14 @@ type headroomStatusRunner interface {
 	CircuitState() headroom.CircuitState
 }
 
+type headroomSnapshotRunner interface {
+	LastOutcome() (headroom.Outcome, bool)
+	CircuitState() headroom.CircuitState
+}
+
 // HeadroomStatus is a fixed dependency projection for management health.
 type HeadroomStatus struct {
+	Observed  bool
 	Effective bool
 	Circuit   headroom.CircuitState
 }
@@ -288,7 +294,39 @@ func (service *Service) HeadroomStatus(ctx context.Context) HeadroomStatus {
 	outcome := runner.Probe(ctx)
 	circuit := runner.CircuitState()
 	return HeadroomStatus{
+		Observed:  true,
 		Effective: (outcome == headroom.OutcomeApplied || outcome == headroom.OutcomeNoChange) && circuit == headroom.CircuitClosed,
+		Circuit:   circuit,
+	}
+}
+
+// HeadroomSnapshot reads the last observed result and circuit without probing.
+func (service *Service) HeadroomSnapshot() HeadroomStatus {
+	if service == nil {
+		return HeadroomStatus{}
+	}
+	service.mu.Lock()
+	if service.closed || service.current == nil {
+		service.mu.Unlock()
+		return HeadroomStatus{}
+	}
+	state := service.current
+	if !state.config.HeadroomEnabled {
+		service.mu.Unlock()
+		return HeadroomStatus{Circuit: headroom.CircuitClosed}
+	}
+	state.inflight++
+	runner, observable := state.headroom.(headroomSnapshotRunner)
+	service.mu.Unlock()
+	defer service.releaseStatusState(state)
+	if !observable || runner == nil {
+		return HeadroomStatus{Circuit: headroom.CircuitClosed}
+	}
+	outcome, observed := runner.LastOutcome()
+	circuit := runner.CircuitState()
+	return HeadroomStatus{
+		Observed:  observed,
+		Effective: observed && (outcome == headroom.OutcomeApplied || outcome == headroom.OutcomeNoChange) && circuit == headroom.CircuitClosed,
 		Circuit:   circuit,
 	}
 }
