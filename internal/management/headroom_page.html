@@ -8,6 +8,7 @@
         :root {
             --bg: #0f141c;
             --card-bg: #161f2e;
+            --card-sub-bg: rgba(255, 255, 255, 0.03);
             --border: #233044;
             --text: #e2e8f0;
             --text-muted: #94a3b8;
@@ -15,8 +16,12 @@
             --green-bg: rgba(34, 197, 94, 0.15);
             --red: #ef4444;
             --red-bg: rgba(239, 68, 68, 0.15);
+            --warn: #eab308;
+            --warn-bg: rgba(234, 179, 8, 0.15);
             --accent: #eb5e28;
             --accent-hover: #f0713f;
+            --btn-secondary: #243248;
+            --btn-secondary-hover: #2f405c;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -32,7 +37,7 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
-            margin-bottom: 24px;
+            margin-bottom: 20px;
             padding-bottom: 16px;
             border-bottom: 1px solid var(--border);
         }
@@ -40,6 +45,7 @@
         .tag { font-size: 12px; padding: 3px 10px; border-radius: 12px; font-weight: 500; }
         .tag-active { background: var(--green-bg); color: var(--green); border: 1px solid var(--green); }
         .tag-inactive { background: var(--red-bg); color: var(--red); border: 1px solid var(--red); }
+        .tag-warn { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn); }
         .card {
             background: var(--card-bg);
             border: 1px solid var(--border);
@@ -78,26 +84,36 @@
         }
         .status-ok { background: var(--green-bg); color: var(--green); }
         .status-err { background: var(--red-bg); color: var(--red); }
+        .status-warn { background: var(--warn-bg); color: var(--warn); }
         .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
         .dot-ok { background: var(--green); box-shadow: 0 0 8px var(--green); }
         .dot-err { background: var(--red); box-shadow: 0 0 8px var(--red); }
+        .dot-warn { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+        .btn-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-top: 16px;
+        }
         .btn {
             display: inline-flex;
             align-items: center;
             justify-content: center;
             gap: 8px;
-            background: var(--accent);
-            color: #fff;
             border: none;
             border-radius: 8px;
-            padding: 10px 18px;
+            padding: 10px 16px;
             font-size: 14px;
             font-weight: 500;
             cursor: pointer;
             width: 100%;
+            transition: background 0.15s ease;
         }
-        .btn:hover { background: var(--accent-hover); }
-        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-primary { background: var(--accent); color: #fff; }
+        .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+        .btn-secondary { background: var(--btn-secondary); color: var(--text); }
+        .btn-secondary:hover:not(:disabled) { background: var(--btn-secondary-hover); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .msg-box {
             margin-top: 16px;
             padding: 12px;
@@ -107,123 +123,401 @@
         }
         .msg-ok { background: var(--green-bg); color: var(--green); border: 1px solid var(--green); display: block; }
         .msg-err { background: var(--red-bg); color: var(--red); border: 1px solid var(--red); display: block; }
+        .msg-warn { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn); display: block; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+            margin-top: 12px;
+        }
+        .metric-card {
+            background: var(--card-sub-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 14px;
+        }
+        .metric-title { font-size: 13px; font-weight: 600; color: #fff; margin-bottom: 8px; }
+        .metric-num { font-size: 18px; font-weight: 600; color: var(--accent); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+        .metric-sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+        .footer-note {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 14px;
+            text-align: right;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>⚡ Token 节省器 (Token Saver)</h1>
-            <span id="pipelineTag" class="tag tag-inactive">检测中</span>
+            <span id="pipelineTag" class="tag tag-warn">握手中...</span>
         </div>
+
+        <div id="fallbackNotice" class="msg-box msg-warn" style="display: none; margin-bottom: 20px;">
+            ⚠️ 当前处于只读降级模式（需要新版管理面板以支持主动连通性检测与完整指标看板）。
+        </div>
+
         <div class="card">
             <div class="card-title">
                 <span>Headroom 上下文压缩服务</span>
-                <div id="headroomBadge" class="status-badge status-ok">
-                    <span id="headroomDot" class="dot dot-ok"></span>
+                <div id="headroomBadge" class="status-badge status-warn">
+                    <span id="headroomDot" class="dot dot-warn"></span>
                     <span id="headroomStatusText">检测中...</span>
                 </div>
             </div>
             <div class="row">
-                <span class="label">配置状态</span>
-                <span id="headroomEnabled" class="val">检测中</span>
+                <span class="label">服务地址 (URL)</span>
+                <span id="headroomUrl" class="val">检测中...</span>
             </div>
             <div class="row">
-                <span class="label">被动健康状态</span>
-                <span id="headroomPassiveStatus" class="val">unknown</span>
+                <span class="label">连通状态</span>
+                <span id="headroomReachable" class="val">检测中...</span>
+            </div>
+            <div class="row">
+                <span class="label">响应延迟</span>
+                <span id="headroomLatency" class="val">-</span>
             </div>
             <div class="row">
                 <span class="label">熔断状态 (Circuit)</span>
-                <span id="headroomCircuit" class="val">unknown</span>
+                <span id="headroomCircuit" class="val">-</span>
             </div>
             <div class="row">
-                <span class="label">检测方式</span>
-                <span class="val">只读快照，不主动请求 Headroom</span>
+                <span class="label">检测时间</span>
+                <span id="headroomCheckedAt" class="val">未检测</span>
             </div>
-            <div style="margin-top: 16px;">
-                <button id="testBtn" class="btn" onclick="refreshStatus()">
-                    <span>🔄 刷新状态</span>
+            <div class="row">
+                <span class="label">最近结果</span>
+                <span id="headroomOutcome" class="val">-</span>
+            </div>
+            <div class="btn-group">
+                <button id="checkBtn" class="btn btn-primary" onclick="performCheck()">
+                    <span>⚡ 连通性检测</span>
+                </button>
+                <button id="refreshBtn" class="btn btn-secondary" onclick="manualRefresh()">
+                    <span>🔄 刷新看板</span>
                 </button>
             </div>
             <div id="msgBox" class="msg-box"></div>
         </div>
+
+        <div class="card">
+            <div class="card-title">
+                <span>流水线节省指标 (Stage Metrics)</span>
+            </div>
+            <div class="grid">
+                <div class="metric-card">
+                    <div class="metric-title">RTK 规则清洗</div>
+                    <div id="rtkSavedBytes" class="metric-num">0 B</div>
+                    <div class="metric-sub">执行: <span id="rtkExecuted">0</span> 次</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Headroom 压缩</div>
+                    <div id="headroomSavedBytes" class="metric-num">0 B</div>
+                    <div class="metric-sub">执行: <span id="headroomExecuted">0</span> 次</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Caveman 表达</div>
+                    <div id="cavemanSavedBytes" class="metric-num">0 B</div>
+                    <div class="metric-sub">执行: <span id="cavemanExecuted">0</span> 次</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Ponytail 尾部精简</div>
+                    <div id="ponytailSavedBytes" class="metric-num">0 B</div>
+                    <div class="metric-sub">执行: <span id="ponytailExecuted">0</span> 次</div>
+                </div>
+            </div>
+            <div class="footer-note">提示：指标计数在 CLIProxyAPI 进程重启后清零。</div>
+        </div>
     </div>
+
     <script>
-        let statusTimer;
-        async function fetchStatus(showMessage = false) {
+        let parentOrigin = null;
+        let isBridgeReady = false;
+        let dashboardTimer = null;
+        let fallbackTimer = null;
+        let isChecking = false;
+        const pendingRequests = new Map();
+
+        function formatBytes(bytes) {
+            if (bytes == null || isNaN(bytes) || bytes <= 0) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+            return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+        }
+
+        const handshakeTimer = setTimeout(function() {
+            if (!isBridgeReady) {
+                startFallbackMode();
+            }
+        }, 2000);
+
+        try {
+            window.parent.postMessage({
+                type: 'cpa.plugin.management.hello',
+                version: 1,
+                pluginId: 'token-saver'
+            }, '*');
+        } catch (e) {
+            startFallbackMode();
+        }
+
+        window.addEventListener('message', function(event) {
+            if (event.source !== window.parent) return;
+            const msg = event.data;
+            if (!msg || typeof msg !== 'object') return;
+
+            if (msg.type === 'cpa.plugin.management.ready' && msg.version === 1 && msg.pluginId === 'token-saver') {
+                if (!isBridgeReady) {
+                    clearTimeout(handshakeTimer);
+                    parentOrigin = event.origin;
+                    isBridgeReady = true;
+                    fetchDashboard().then(function() {
+                        if (!dashboardTimer) {
+                            dashboardTimer = setInterval(fetchDashboard, 5000);
+                        }
+                    });
+                }
+                return;
+            }
+
+            if (msg.type === 'cpa.plugin.management.response' && msg.version === 1) {
+                const handler = pendingRequests.get(msg.requestId);
+                if (handler) {
+                    pendingRequests.delete(msg.requestId);
+                    clearTimeout(handler.timer);
+                    if (msg.ok) {
+                        handler.resolve(msg.data);
+                    } else {
+                        const errMsg = (msg.data && msg.data.error && msg.data.error.message) || ('HTTP ' + msg.status);
+                        handler.reject(new Error(errMsg));
+                    }
+                }
+            }
+        });
+
+        function sendBridgeRequest(method, path, body) {
+            if (!isBridgeReady || !parentOrigin) {
+                return Promise.reject(new Error('Bridge not ready'));
+            }
+            return new Promise(function(resolve, reject) {
+                const requestId = 'req_' + Math.random().toString(36).slice(2) + '_' + Date.now();
+                const timer = setTimeout(function() {
+                    pendingRequests.delete(requestId);
+                    reject(new Error('请求超时'));
+                }, 10000);
+
+                pendingRequests.set(requestId, { resolve: resolve, reject: reject, timer: timer });
+
+                window.parent.postMessage({
+                    type: 'cpa.plugin.management.request',
+                    version: 1,
+                    requestId: requestId,
+                    pluginId: 'token-saver',
+                    method: method,
+                    path: path,
+                    body: body || null
+                }, parentOrigin);
+            });
+        }
+
+        async function fetchDashboard() {
             try {
-                const startedAt = performance.now();
+                const data = await sendBridgeRequest('GET', '/v0/management/plugins/token-saver/dashboard');
+                renderDashboard(data);
+            } catch (err) {
+                console.error('Fetch dashboard error:', err);
+            }
+        }
+
+        function renderDashboard(data) {
+            if (!data) return;
+            const hr = data.headroom || {};
+            const enabled = hr.enabled === true;
+
+            document.getElementById('pipelineTag').className = enabled ? 'tag tag-active' : 'tag tag-inactive';
+            document.getElementById('pipelineTag').innerText = enabled ? '已启用' : '未启用';
+            document.getElementById('headroomUrl').innerText = hr.url || (enabled ? '已启用' : '未配置');
+
+            const badge = document.getElementById('headroomBadge');
+            const dot = document.getElementById('headroomDot');
+            const txt = document.getElementById('headroomStatusText');
+            const reachEl = document.getElementById('headroomReachable');
+
+            if (!enabled) {
+                badge.className = 'status-badge status-err';
+                dot.className = 'dot dot-err';
+                txt.innerText = '未启用';
+                reachEl.innerText = '⚪ 未启用';
+            } else if (hr.status === 'ready') {
+                badge.className = 'status-badge status-ok';
+                dot.className = 'dot dot-ok';
+                txt.innerText = '运行正常';
+                reachEl.innerText = '🟢 运行中';
+            } else if (hr.status === 'degraded' || hr.circuit === 'open') {
+                badge.className = 'status-badge status-err';
+                dot.className = 'dot dot-err';
+                txt.innerText = '服务降级/熔断';
+                reachEl.innerText = '🔴 无法连接';
+            } else {
+                badge.className = 'status-badge status-warn';
+                dot.className = 'dot dot-warn';
+                txt.innerText = '等待采样';
+                reachEl.innerText = '🟡 状态未知';
+            }
+
+            document.getElementById('headroomLatency').innerText = hr.last_latency_ms != null ? hr.last_latency_ms + ' ms' : '-';
+            document.getElementById('headroomCircuit').innerText = hr.circuit || 'unknown';
+            document.getElementById('headroomOutcome').innerText = hr.last_outcome || '-';
+            document.getElementById('headroomCheckedAt').innerText = hr.last_checked_at ? new Date(hr.last_checked_at).toLocaleString() : '未检测';
+
+            const stages = data.stages || {};
+            const renderStage = function(prefix, stage) {
+                if (!stage) return;
+                const execEl = document.getElementById(prefix + 'Executed');
+                const savedEl = document.getElementById(prefix + 'SavedBytes');
+                if (execEl) execEl.innerText = stage.executed != null ? stage.executed.toLocaleString() : '0';
+                if (savedEl) savedEl.innerText = formatBytes(stage.saved_bytes);
+            };
+
+            renderStage('rtk', stages.rtk);
+            renderStage('headroom', stages.headroom);
+            renderStage('caveman', stages.caveman);
+            renderStage('ponytail', stages.ponytail);
+        }
+
+        async function performCheck() {
+            if (isChecking || !isBridgeReady) return;
+            isChecking = true;
+            const btn = document.getElementById('checkBtn');
+            const msg = document.getElementById('msgBox');
+            btn.disabled = true;
+            btn.innerHTML = '<span>⏳ 正在检测...</span>';
+            msg.className = 'msg-box';
+            try {
+                const result = await sendBridgeRequest('POST', '/v0/management/plugins/token-saver/headroom/check');
+                msg.className = result.reachable ? 'msg-box msg-ok' : 'msg-box msg-err';
+                msg.innerText = (result.reachable ? '✅ Headroom 连通正常' : '❌ Headroom 无法连接') + '（耗时 ' + result.latency_ms + 'ms，状态：' + result.outcome + '）';
+                await fetchDashboard();
+            } catch (err) {
+                msg.className = 'msg-box msg-err';
+                msg.innerText = '❌ 检测失败: ' + err.message;
+            } finally {
+                isChecking = false;
+                btn.disabled = false;
+                btn.innerHTML = '<span>⚡ 连通性检测</span>';
+            }
+        }
+
+        async function manualRefresh() {
+            if (isBridgeReady) {
+                const btn = document.getElementById('refreshBtn');
+                btn.disabled = true;
+                try {
+                    await fetchDashboard();
+                } finally {
+                    btn.disabled = false;
+                }
+            } else {
+                await fetchPublicStatus();
+            }
+        }
+
+        function startFallbackMode() {
+            if (isBridgeReady) return;
+            const notice = document.getElementById('fallbackNotice');
+            if (notice) {
+                notice.style.display = 'block';
+                notice.innerText = '⚠️ 当前处于只读降级模式（需要新版管理面板以支持主动连通性检测与完整指标看板）。';
+            }
+            const checkBtn = document.getElementById('checkBtn');
+            if (checkBtn) {
+                checkBtn.disabled = true;
+                checkBtn.title = '需要新版管理面板';
+            }
+            fetchPublicStatus();
+            if (!fallbackTimer) {
+                fallbackTimer = setInterval(fetchPublicStatus, 10000);
+            }
+        }
+
+        async function fetchPublicStatus() {
+            try {
                 const res = await fetch('/v0/resource/plugins/token-saver/headroom/status', { cache: 'no-store' });
                 if (!res.ok) {
-                    if (res.status >= 400 && res.status < 500 && statusTimer) {
-                        clearInterval(statusTimer);
-                        statusTimer = undefined;
+                    if (res.status >= 400 && res.status < 500 && fallbackTimer) {
+                        clearInterval(fallbackTimer);
+                        fallbackTimer = null;
                     }
                     throw new Error('HTTP ' + res.status);
                 }
                 const data = await res.json();
-                renderStatus(data);
-                if (showMessage) {
-                    const msg = document.getElementById('msgBox');
-                    msg.className = 'msg-box msg-ok';
-                    msg.innerText = '✅ 状态刷新完成（耗时 ' + Math.round(performance.now() - startedAt) + 'ms）。';
-                }
+                renderPublicStatus(data);
             } catch (err) {
-                console.error(err);
-                document.getElementById('headroomBadge').className = 'status-badge status-err';
-                document.getElementById('headroomDot').className = 'dot dot-err';
-                document.getElementById('headroomStatusText').innerText = '状态接口不可用';
-                if (showMessage) {
-                    const msg = document.getElementById('msgBox');
-                    msg.className = 'msg-box msg-err';
-                    msg.innerText = '❌ 检测失败: ' + err.message;
-                }
+                console.error('Fetch public status error:', err);
+                const badge = document.getElementById('headroomBadge');
+                const dot = document.getElementById('headroomDot');
+                const txt = document.getElementById('headroomStatusText');
+                if (badge) badge.className = 'status-badge status-err';
+                if (dot) dot.className = 'dot dot-err';
+                if (txt) txt.innerText = '状态接口不可用';
+                const reachEl = document.getElementById('headroomReachable');
+                if (reachEl) reachEl.innerText = '🔴 无法连接';
             }
         }
-        function renderStatus(data) {
+
+        function renderPublicStatus(data) {
             const enabled = data.enabled === true;
             const status = data.status || 'unknown';
             const circuit = data.circuit || 'unknown';
+
             document.getElementById('pipelineTag').className = enabled ? 'tag tag-active' : 'tag tag-inactive';
             document.getElementById('pipelineTag').innerText = enabled ? '已启用' : '未启用';
-            document.getElementById('headroomEnabled').innerText = enabled ? 'enabled' : 'disabled';
-            document.getElementById('headroomPassiveStatus').innerText = status;
+            document.getElementById('headroomUrl').innerText = enabled ? '已启用（只读）' : '未启用';
+
             const badge = document.getElementById('headroomBadge');
             const dot = document.getElementById('headroomDot');
             const txt = document.getElementById('headroomStatusText');
-            if (status === 'ready' && circuit === 'closed') {
-                badge.className = 'status-badge status-ok';
-                dot.className = 'dot dot-ok';
-                txt.innerText = '最近请求正常';
-            } else if (status === 'degraded' || circuit === 'open') {
-                badge.className = 'status-badge status-err';
-                dot.className = 'dot dot-err';
-                txt.innerText = '最近请求失败或熔断';
-            } else if (!enabled) {
+            const reachEl = document.getElementById('headroomReachable');
+
+            if (!enabled) {
                 badge.className = 'status-badge status-err';
                 dot.className = 'dot dot-err';
                 txt.innerText = '未启用';
-            } else {
+                reachEl.innerText = '⚪ 未启用';
+            } else if (status === 'ready' && circuit === 'closed') {
+                badge.className = 'status-badge status-ok';
+                dot.className = 'dot dot-ok';
+                txt.innerText = '最近请求正常';
+                reachEl.innerText = '🟢 运行中';
+            } else if (status === 'degraded' || circuit === 'open') {
                 badge.className = 'status-badge status-err';
                 dot.className = 'dot dot-err';
+                txt.innerText = '服务降级或熔断';
+                reachEl.innerText = '🔴 无法连接';
+            } else {
+                badge.className = 'status-badge status-warn';
+                dot.className = 'dot dot-warn';
                 txt.innerText = '尚无请求样本';
+                reachEl.innerText = '🟡 状态未知';
             }
+
             document.getElementById('headroomCircuit').innerText = circuit;
+            document.getElementById('headroomLatency').innerText = '-';
+            document.getElementById('headroomOutcome').innerText = status;
+            document.getElementById('headroomCheckedAt').innerText = '降级模式不可用';
+
+            const renderStageUnavailable = function(prefix) {
+                const execEl = document.getElementById(prefix + 'Executed');
+                const savedEl = document.getElementById(prefix + 'SavedBytes');
+                if (execEl) execEl.innerText = '-';
+                if (savedEl) savedEl.innerText = '-';
+            };
+            renderStageUnavailable('rtk');
+            renderStageUnavailable('headroom');
+            renderStageUnavailable('caveman');
+            renderStageUnavailable('ponytail');
         }
-        async function refreshStatus() {
-            const btn = document.getElementById('testBtn');
-            const msg = document.getElementById('msgBox');
-            btn.disabled = true;
-            btn.innerHTML = '<span>⏳ 正在刷新...</span>';
-            msg.className = 'msg-box';
-            try {
-                await fetchStatus(true);
-            } finally {
-                btn.disabled = false;
-                btn.innerHTML = '<span>🔄 刷新状态</span>';
-            }
-        }
-        fetchStatus();
-        statusTimer = setInterval(fetchStatus, 30000);
     </script>
 </body>
 </html>

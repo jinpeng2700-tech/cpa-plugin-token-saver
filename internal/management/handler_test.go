@@ -124,11 +124,24 @@ func TestHeadroomPageNeverRequestsAuthenticatedManagementRoutes(t *testing.T) {
 	if !strings.Contains(body, "/v0/resource/plugins/token-saver/headroom/status") {
 		t.Fatalf("page does not use public status resource: %s", response.Body)
 	}
+	for _, required := range []string{
+		"cpa.plugin.management.hello",
+		"cpa.plugin.management.ready",
+		"cpa.plugin.management.request",
+		"cpa.plugin.management.response",
+		"/plugins/token-saver/dashboard",
+		"/plugins/token-saver/headroom/check",
+		"需要新版管理面板",
+		"saved_bytes",
+	} {
+		if !strings.Contains(body, required) {
+			t.Errorf("page missing required string %q", required)
+		}
+	}
 	for _, forbidden := range []string{
-		"/v0/management/", "Authorization", "X-Management-Key", "URLSearchParams",
-		"localStorage", "management_key", "managementKey", "setInterval(fetchStatus, 10000)",
-		"msg.style.display = 'none'", "http://127.0.0.1:8787", "build_version",
-		"last_self_test", "data.metrics", "pluginVer", "mRtk", "mHeadroom",
+		"fetch('/v0/management", "fetch(\"/v0/management", "fetch(`/v0/management",
+		"managementKey", "Authorization", "localStorage", "sessionStorage",
+		"URLSearchParams", "document.cookie",
 	} {
 		if strings.Contains(body, forbidden) {
 			t.Errorf("page contains forbidden authenticated flow %q", forbidden)
