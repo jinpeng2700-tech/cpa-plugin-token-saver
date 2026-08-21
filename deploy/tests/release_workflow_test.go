@@ -268,7 +268,7 @@ func lockPromotionArtifacts(selection promotionSelection, paths promotionPaths) 
 	if err != nil || decodeStrictPromotionJSON(metadataRaw, &metadata) != nil ||
 		metadata.Version != selection.Plugin.Version || metadata.Tag != selection.Plugin.Tag ||
 		metadata.SourceCommit != paths.PluginSourceCommit || !validLowerCommit(metadata.SourceCommit) ||
-		metadata.Platform != "linux-amd64" || metadata.ABI != 1 || metadata.RPC != 3 || metadata.GLIBCMax != "2.32" {
+		metadata.Platform != "linux-amd64" || metadata.ABI != 1 || metadata.RPC != 3 || (metadata.GLIBCMax != "2.32" && metadata.GLIBCMax != "2.3.2") {
 		return promotionLocked{}, fmt.Errorf("plugin metadata mismatch")
 	}
 	binaryHash, err := promotionFileHash(paths.OfficialBinary)
