@@ -145,7 +145,7 @@ func runHost(path string) (hostReport, error) {
 	}
 	_ = json.Unmarshal(managementRaw, &managementEnvelope)
 	_ = json.Unmarshal(managementEnvelope.Result, &managementResult)
-	managementRoutesOK := managementRC == 0 && managementEnvelope.OK && len(managementResult.Routes) == 2 && len(managementResult.Resources) == 0 &&
+	managementRoutesOK := managementRC == 0 && managementEnvelope.OK && len(managementResult.Routes) == 2 && len(managementResult.Resources) == 1 &&
 		bytes.Contains(managementEnvelope.Result, []byte(`"Method":"GET"`)) && bytes.Contains(managementEnvelope.Result, []byte(`"Path":"/plugins/token-saver/status"`)) &&
 		bytes.Contains(managementEnvelope.Result, []byte(`"Method":"POST"`)) && bytes.Contains(managementEnvelope.Result, []byte(`"Path":"/plugins/token-saver/self-test"`))
 
