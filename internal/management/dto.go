@@ -12,6 +12,7 @@ const (
 	ManagementBasePath = "/v0/management"
 	StatusRoute        = "/plugins/token-saver/status"
 	SelfTestRoute      = "/plugins/token-saver/self-test"
+	HeadroomPageRoute  = "/headroom"
 	FixtureRevision    = "v1"
 )
 
@@ -49,8 +50,10 @@ const (
 // Route intentionally uses Go's default JSON field names because RPC schema 3
 // mirrors the host SDK's Method and Path fields.
 type Route struct {
-	Method string
-	Path   string
+	Method      string
+	Path        string
+	Menu        string
+	Description string
 }
 
 // Registration is the management.register result. Resources remains an

@@ -70,7 +70,13 @@ func (handler *Handler) Registration() Registration {
 			{Method: http.MethodGet, Path: StatusRoute},
 			{Method: http.MethodPost, Path: SelfTestRoute},
 		},
-		Resources: []Route{},
+		Resources: []Route{
+			{
+				Path:        HeadroomPageRoute,
+				Menu:        "Headroom 状态",
+				Description: "查看 Headroom 连通状态、压缩延时与一键自检",
+			},
+		},
 	}
 }
 
@@ -99,6 +105,11 @@ func (handler *Handler) Handle(ctx context.Context, request Request) (response R
 			return errorResponse(http.StatusMethodNotAllowed, ErrorMethodNotAllowed, "management method is not allowed")
 		}
 		return handler.selfTest(ctx)
+	case "/v0/resource/plugins/token-saver" + HeadroomPageRoute, HeadroomPageRoute:
+		if request.Method != http.MethodGet {
+			return errorResponse(http.StatusMethodNotAllowed, ErrorMethodNotAllowed, "resource method is not allowed")
+		}
+		return htmlResponse(http.StatusOK, headroomPageHTML)
 	default:
 		return errorResponse(http.StatusNotFound, ErrorRouteNotFound, "management route was not found")
 	}
@@ -242,6 +253,16 @@ func circuitProjection(state headroom.CircuitState) string {
 		return HeadroomCircuitHalfOpen
 	default:
 		return HeadroomCircuitClosed
+	}
+}
+
+func htmlResponse(statusCode int, body []byte) Response {
+	headers := make(http.Header)
+	headers.Set("Content-Type", "text/html; charset=utf-8")
+	return Response{
+		StatusCode: statusCode,
+		Headers:    headers,
+		Body:       body,
 	}
 }
 

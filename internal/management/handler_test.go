@@ -23,8 +23,8 @@ func TestRegistrationDeclaresOnlyAuthenticatedManagementRoutes(t *testing.T) {
 	if !reflect.DeepEqual(registration.Routes, wantRoutes) {
 		t.Fatalf("routes = %#v, want %#v", registration.Routes, wantRoutes)
 	}
-	if registration.Resources == nil || len(registration.Resources) != 0 {
-		t.Fatalf("resources = %#v, want explicit empty list", registration.Resources)
+	if len(registration.Resources) != 1 || registration.Resources[0].Path != HeadroomPageRoute {
+		t.Fatalf("resources = %#v, want 1 headroom route", registration.Resources)
 	}
 	raw, errMarshal := json.Marshal(registration)
 	if errMarshal != nil {
@@ -35,7 +35,7 @@ func TestRegistrationDeclaresOnlyAuthenticatedManagementRoutes(t *testing.T) {
 			t.Errorf("registration %s missing %q", raw, want)
 		}
 	}
-	for _, forbidden := range []string{`"method"`, `"path"`, `"Menu"`, `"Handler"`} {
+	for _, forbidden := range []string{`"method"`, `"path"`, `"menu"`, `"Handler"`} {
 		if bytes.Contains(raw, []byte(forbidden)) {
 			t.Errorf("registration %s contains forbidden field %q", raw, forbidden)
 		}

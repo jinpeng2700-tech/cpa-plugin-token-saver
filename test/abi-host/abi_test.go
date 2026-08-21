@@ -118,7 +118,7 @@ future_field: preserved
 	if errDecode := json.Unmarshal(managementEnvelope.Result, &management); errDecode != nil {
 		t.Fatalf("decode management registration: %v", errDecode)
 	}
-	if management.Routes == nil || management.Resources == nil || len(management.Routes) != 2 || len(management.Resources) != 0 {
+	if management.Routes == nil || management.Resources == nil || len(management.Routes) != 2 || len(management.Resources) != 1 {
 		t.Fatalf("management registration = %#v, want two authenticated routes and explicit empty resources", management)
 	}
 }
@@ -144,7 +144,7 @@ func TestRuntimeManagementUsesRealHostFieldNamesAndBase64Bodies(t *testing.T) {
 			t.Errorf("management.register result %s missing %s", registrationEnvelope.Result, want)
 		}
 	}
-	for _, forbidden := range [][]byte{[]byte(`"method"`), []byte(`"path"`), []byte(`"Handler"`), []byte(`"Menu"`)} {
+	for _, forbidden := range [][]byte{[]byte(`"method"`), []byte(`"path"`), []byte(`"Handler"`)} {
 		if bytes.Contains(registrationEnvelope.Result, forbidden) {
 			t.Errorf("management.register result %s contains %s", registrationEnvelope.Result, forbidden)
 		}
