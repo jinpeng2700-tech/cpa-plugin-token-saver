@@ -77,3 +77,16 @@ Advance only after the new config generation/digest is visible. Record build fin
 Stop immediately on plugin 5xx, provider 400/422, structure/tool/SSE corruption, duplicate prompt markers, critical task failure, Headroom timeout/saturation, OOM/service restart, or new persistent swap-in. Disable the most recent stage; if attribution is unclear, disable all four. Wait for the new generation and old in-flight count to reach zero, then prove `pipeline=all_bypassed`, byte-identical fixture output, zero new Headroom calls, and complete confirmation within 30 seconds.
 
 Full/Ultra levels, 24-hour observation, 50–100 requests, and p95/p99 are later confidence expansion. They do not replace or retroactively improve this minimum gate.
+
+## 6. Composite reconciler rollout and rollback (Schema v2)
+
+The repository-owned updater script is `deploy/vps-reconciler.py` (installed on the host as `/root/cliproxyapi-updater.py`).
+
+### Verification & Reconciliation Rules:
+1. **Schema v2 and panel requirement:** Target deployments must provide schema v2 with a valid `panel` object including exact asset hash and tag. If a current active deployment is on schema v1, the reconciler recognizes it during transition lineage, but refuses to accept schema v1 as a new update target.
+2. **Atomic deployment staging:** Downloads official CLI archive, Token Saver `.so`, optional compat probe, patched `management.html` (mode `0600`), and `panel-manifest.json` into a temporary staging folder within `/root/cliproxyapi.deployments/`. The target directory ID embeds CLI version, plugin version, and panel tag (e.g. `dep-cli-7.2.137-plugin-1.1.0-panel-v1.22.6-bridge.1-g4`).
+3. **Fail-closed verification:** If panel SHA mismatch, missing assets, truncated download, or path traversal occurs, staging is aborted and the active symlink `/root/cliproxyapi` remains completely untouched.
+4. **Service smoke gate & rollback:** After switching symlinks, service restarts and executes an HTTP smoke probe on `/v0/resource/plugins/token-saver/headroom/status`. If smoke check fails, the reconciler automatically rolls back `/root/cliproxyapi` to the previous deployment and restarts the service.
+5. **State isolation & preservation:** Persistent directories (`/root/cliproxyapi/state`, config, auth tokens, logs) are never removed, never copied into versioned deployment directories, and never overwritten.
+6. **Active & previous deployment retention:** The active deployment and the previous deployment (`/root/cliproxyapi.prev`) are protected and never deleted during cleanup.
+7. **Log sanitization:** All logged URLs and messages sanitize embedded HTTP basic authentication credentials, query tokens (`?token=...`, `?key=...`), configuration secrets, client secrets, API keys, and Authorization/Bearer tokens.
