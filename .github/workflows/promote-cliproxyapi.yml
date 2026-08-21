@@ -182,12 +182,14 @@ jobs:
             go test -count=1 -run '^TestPromotionCommand$' ./deploy/tests
           echo "publish=$(jq -er '.publish' "$root/result.json")" >> "$GITHUB_OUTPUT"
           echo "tag=$(jq -er '.tag' "$root/result.json")" >> "$GITHUB_OUTPUT"
+      - name: Stage approved candidate for upload
+        run: |
+          mkdir -p dist
+          cp "$RUNNER_TEMP/promotion/approved-release.json" "$RUNNER_TEMP/promotion/channel.json" dist/
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: approved-candidate-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/promotion/approved-release.json
-            ${{ runner.temp }}/promotion/channel.json
+          path: dist/
           if-no-files-found: error
           retention-days: 1
           overwrite: false
