@@ -24,7 +24,7 @@ type Options struct {
 	BuildVersion   string
 	ABIVersion     uint32
 	RPCSchema      uint32
-	Saver          *saver.Service
+	Saver         *saver.Service
 	Now            func() time.Time
 	ConfigSnapshot func() *config.Store
 	HeadroomCheck  HeadroomCheckFunc
@@ -32,10 +32,10 @@ type Options struct {
 
 // Handler owns only redacted management state.
 type Handler struct {
-	buildVersion   string
+	buildVersion  string
 	abiVersion     uint32
-	rpcSchema      uint32
-	saver          *saver.Service
+	rpcSchema     uint32
+	saver         *saver.Service
 	now            func() time.Time
 	startedAt      time.Time
 	configSnapshot func() *config.Store
@@ -46,7 +46,7 @@ type Handler struct {
 	lastSelfTest   string
 
 	checkMu       sync.Mutex
-	checkInFlight chan struct{}
+	checkInFlight  chan struct{}
 	lastCheckedAt *time.Time
 	lastLatencyMS *uint64
 	lastOutcome   string
@@ -342,7 +342,7 @@ func (handler *Handler) status(ctx context.Context) StatusDTO {
 		FixtureRevision:    FixtureRevision,
 		StartedAt:          metricSnapshot.StartedAt,
 		Live:               handler.saver != nil,
-		Config:             configState,
+		Config:               configState,
 		ConfigGeneration:   handler.generation(),
 		ConfigDigest:       digest,
 		Pipeline:           pipeline,
@@ -350,8 +350,8 @@ func (handler *Handler) status(ctx context.Context) StatusDTO {
 		HeadroomDesired:    cfg.HeadroomEnabled,
 		HeadroomEffective:  headroomEffective,
 		HeadroomCircuit:    headroomCircuit,
-		Current:            metricSnapshot.Current,
-		Previous:           metricSnapshot.Previous,
+		Current:           metricSnapshot.Current,
+		Previous:          metricSnapshot.Previous,
 		LastSelfTestAt:     lastAt,
 		LastSelfTestResult: lastResult,
 		Metrics:            metricSnapshot.Stages,

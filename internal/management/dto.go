@@ -90,21 +90,21 @@ type Response struct {
 // StatusDTO is the fixed, redacted projection consumed by the UI and updater.
 type StatusDTO struct {
 	BuildVersion       string                     `json:"build_version"`
-	ABIVersion         uint32                     `json:"abi_version"`
-	RPCSchema          uint32                     `json:"rpc_schema"`
+	ABIVersion         uint32                       `json:"abi_version"`
+	RPCSchema          uint32                      `json:"rpc_schema"`
 	FixtureRevision    string                     `json:"fixture_revision"`
 	StartedAt          time.Time                  `json:"started_at"`
 	Live               bool                       `json:"live"`
-	Config             string                     `json:"config"`
-	ConfigGeneration   uint64                     `json:"config_generation"`
+	Config               string                     `json:"config"`
+	ConfigGeneration   uint64                      `json:"config_generation"`
 	ConfigDigest       string                     `json:"config_digest"`
 	Pipeline           string                     `json:"pipeline"`
 	Dependency         string                     `json:"dependency"`
 	HeadroomDesired    bool                       `json:"headroom_desired"`
 	HeadroomEffective  bool                       `json:"headroom_effective"`
 	HeadroomCircuit    string                     `json:"headroom_circuit"`
-	Current            metrics.GenerationSnapshot `json:"current"`
-	Previous           metrics.GenerationSnapshot `json:"previous"`
+	Current           metrics.GenerationSnapshot `json:"current"`
+	Previous          metrics.GenerationSnapshot `json:"previous"`
 	LastSelfTestAt     *time.Time                 `json:"last_self_test_at"`
 	LastSelfTestResult string                     `json:"last_self_test_result"`
 	Metrics            metrics.StageProjection    `json:"metrics"`

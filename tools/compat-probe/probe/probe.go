@@ -192,6 +192,7 @@ func stagesEqual(a, b probeStages) bool {
 		stageCountersEqual(a.Ponytail, b.Ponytail)
 }
 
+
 type pluginList struct {
 	Plugins []struct {
 		ID               string `json:"id"`
