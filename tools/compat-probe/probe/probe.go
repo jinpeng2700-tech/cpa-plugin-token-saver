@@ -59,6 +59,140 @@ type selfTestResponse struct {
 	Result          string `json:"result"`
 }
 
+type probeStageCounters struct {
+	Executed     uint64 `json:"executed"`
+	Bypassed     uint64 `json:"bypassed"`
+	FailOpen     uint64 `json:"fail_open"`
+	Timeout      uint64 `json:"timeout"`
+	Saturated    uint64 `json:"saturated"`
+	InputBytes   uint64 `json:"input_bytes"`
+	OutputBytes  uint64 `json:"output_bytes"`
+	SavedBytes   uint64 `json:"saved_bytes"`
+	DurationNano uint64 `json:"duration_ns"`
+}
+
+type probeStages struct {
+	RTK      probeStageCounters `json:"rtk"`
+	Headroom probeStageCounters `json:"headroom"`
+	Caveman  probeStageCounters `json:"caveman"`
+	Ponytail probeStageCounters `json:"ponytail"`
+}
+
+type probeDashboardHeadroom struct {
+	Enabled       bool       `json:"enabled"`
+	URL           string     `json:"url"`
+	Status        string     `json:"status"`
+	Circuit       string     `json:"circuit"`
+	LastCheckedAt *time.Time `json:"last_checked_at"`
+	LastLatencyMS *uint64    `json:"last_latency_ms"`
+	LastOutcome   string     `json:"last_outcome"`
+}
+
+type probeDashboard struct {
+	StartedAt time.Time              `json:"started_at"`
+	Headroom  probeDashboardHeadroom `json:"headroom"`
+	Stages    probeStages            `json:"stages"`
+}
+
+type probeHeadroomCheck struct {
+	Reachable bool      `json:"reachable"`
+	Status    string    `json:"status"`
+	Outcome   string    `json:"outcome"`
+	LatencyMS uint64    `json:"latency_ms"`
+	TestedAt  time.Time `json:"tested_at"`
+}
+
+func validStageCounters(s probeStageCounters) bool {
+	expectedSaved := uint64(0)
+	if s.InputBytes > s.OutputBytes {
+		expectedSaved = s.InputBytes - s.OutputBytes
+	}
+	return s.SavedBytes == expectedSaved
+}
+
+func validDashboardRaw(raw []byte, expectedHeadroomURL string) (*probeDashboard, bool) {
+	var checkMap map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &checkMap); err != nil {
+		return nil, false
+	}
+	if len(checkMap) != 3 || checkMap["started_at"] == nil || checkMap["headroom"] == nil || checkMap["stages"] == nil {
+		return nil, false
+	}
+	var checkStages map[string]json.RawMessage
+	if err := json.Unmarshal(checkMap["stages"], &checkStages); err != nil || len(checkStages) != 4 ||
+		checkStages["rtk"] == nil || checkStages["headroom"] == nil || checkStages["caveman"] == nil || checkStages["ponytail"] == nil {
+		return nil, false
+	}
+	var checkHeadroom map[string]json.RawMessage
+	if err := json.Unmarshal(checkMap["headroom"], &checkHeadroom); err != nil || len(checkHeadroom) != 7 ||
+		checkHeadroom["enabled"] == nil || checkHeadroom["url"] == nil || checkHeadroom["status"] == nil ||
+		checkHeadroom["circuit"] == nil || checkHeadroom["last_checked_at"] == nil ||
+		checkHeadroom["last_latency_ms"] == nil || checkHeadroom["last_outcome"] == nil {
+		return nil, false
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var dash probeDashboard
+	if err := decoder.Decode(&dash); err != nil {
+		return nil, false
+	}
+	if dash.StartedAt.IsZero() {
+		return nil, false
+	}
+	if !dash.Headroom.Enabled || dash.Headroom.URL != expectedHeadroomURL ||
+		dash.Headroom.Status == "" || dash.Headroom.Circuit == "" || dash.Headroom.LastOutcome == "" {
+		return nil, false
+	}
+	if !validStageCounters(dash.Stages.RTK) ||
+		!validStageCounters(dash.Stages.Headroom) ||
+		!validStageCounters(dash.Stages.Caveman) ||
+		!validStageCounters(dash.Stages.Ponytail) {
+		return nil, false
+	}
+	return &dash, true
+}
+
+func validHeadroomCheckRaw(raw []byte) (*probeHeadroomCheck, bool) {
+	var checkMap map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &checkMap); err != nil || len(checkMap) != 5 ||
+		checkMap["reachable"] == nil || checkMap["status"] == nil || checkMap["outcome"] == nil ||
+		checkMap["latency_ms"] == nil || checkMap["tested_at"] == nil {
+		return nil, false
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var check probeHeadroomCheck
+	if err := decoder.Decode(&check); err != nil {
+		return nil, false
+	}
+	if !check.Reachable || check.Status != "ready" || check.Outcome != "applied" || check.TestedAt.IsZero() {
+		return nil, false
+	}
+	return &check, true
+}
+
+func stageCountersEqual(a, b probeStageCounters) bool {
+	return a.Executed == b.Executed &&
+		a.Bypassed == b.Bypassed &&
+		a.FailOpen == b.FailOpen &&
+		a.Timeout == b.Timeout &&
+		a.Saturated == b.Saturated &&
+		a.InputBytes == b.InputBytes &&
+		a.OutputBytes == b.OutputBytes &&
+		a.SavedBytes == b.SavedBytes &&
+		a.DurationNano == b.DurationNano
+}
+
+func stagesEqual(a, b probeStages) bool {
+	return stageCountersEqual(a.RTK, b.RTK) &&
+		stageCountersEqual(a.Headroom, b.Headroom) &&
+		stageCountersEqual(a.Caveman, b.Caveman) &&
+		stageCountersEqual(a.Ponytail, b.Ponytail)
+}
+
+
 type pluginList struct {
 	Plugins []struct {
 		ID               string `json:"id"`
@@ -202,9 +336,54 @@ func Run(parent context.Context, options Options) Report {
 			FailedScenario: failedScenario,
 		}
 	}
+	dashboardURL := baseURL + "/v0/management/plugins/token-saver/dashboard"
+	checkURL := baseURL + "/v0/management/plugins/token-saver/headroom/check"
+
+	var rawDashBefore json.RawMessage
+	if outcome := jsonRequest(ctx, client, http.MethodGet, dashboardURL, compatManagementKey, nil, &rawDashBefore); outcome != httpOK {
+		return failure(httpCode(outcome, CodeDashboard))
+	}
+	dashBefore, okDashBefore := validDashboardRaw(rawDashBefore, headroomMock.URL())
+	if !okDashBefore {
+		return failure(CodeDashboard)
+	}
+
+	var rawCheck json.RawMessage
+	if outcome := jsonRequest(ctx, client, http.MethodPost, checkURL, compatManagementKey, []byte(`{}`), &rawCheck); outcome != httpOK {
+		return failure(httpCode(outcome, CodeHeadroomCheck))
+	}
+	check, okCheck := validHeadroomCheckRaw(rawCheck)
+	if !okCheck {
+		return failure(CodeHeadroomCheck)
+	}
+
+	var rawDashAfter json.RawMessage
+	if outcome := jsonRequest(ctx, client, http.MethodGet, dashboardURL, compatManagementKey, nil, &rawDashAfter); outcome != httpOK {
+		return failure(httpCode(outcome, CodeDashboard))
+	}
+	dashAfter, okDashAfter := validDashboardRaw(rawDashAfter, headroomMock.URL())
+	if !okDashAfter {
+		return failure(CodeDashboard)
+	}
+
+	if dashAfter.Headroom.LastCheckedAt == nil || !dashAfter.Headroom.LastCheckedAt.Equal(check.TestedAt) ||
+		dashAfter.Headroom.LastLatencyMS == nil || *dashAfter.Headroom.LastLatencyMS != check.LatencyMS ||
+		dashAfter.Headroom.LastOutcome != check.Outcome {
+		return failure(CodeDashboard)
+	}
+
+	if !stagesEqual(dashBefore.Stages, dashAfter.Stages) {
+		return failure(CodeDashboard)
+	}
+
 	publicStatus = nil
 	if outcome := jsonRequest(ctx, client, http.MethodGet, baseURL+"/v0/resource/plugins/token-saver/headroom/status", "", nil, &publicStatus); outcome != httpOK ||
 		!validPublicStatus(publicStatus, true, "ready", "closed") {
+		return failure(CodePublicStatus)
+	}
+
+	var rawPublicPage json.RawMessage
+	if outcome := jsonRequest(ctx, client, http.MethodGet, baseURL+"/v0/resource/plugins/token-saver/headroom", "", nil, &rawPublicPage); outcome == httpAuth {
 		return failure(CodePublicStatus)
 	}
 

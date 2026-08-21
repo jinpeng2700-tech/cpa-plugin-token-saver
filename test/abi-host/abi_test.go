@@ -111,15 +111,34 @@ future_field: preserved
 		t.Fatalf("management.register status = %d, envelope = %s", managementStatus, rawManagement)
 	}
 	var management struct {
-		Routes    []json.RawMessage `json:"routes"`
-		Resources []json.RawMessage `json:"resources"`
+		Routes []struct {
+			Method string `json:"Method"`
+			Path   string `json:"Path"`
+		} `json:"routes"`
+		Resources []struct {
+			Method      string `json:"Method"`
+			Path        string `json:"Path"`
+			Menu        string `json:"Menu"`
+			Description string `json:"Description"`
+		} `json:"resources"`
 	}
 	managementEnvelope := decodeEnvelope(t, rawManagement)
 	if errDecode := json.Unmarshal(managementEnvelope.Result, &management); errDecode != nil {
 		t.Fatalf("decode management registration: %v", errDecode)
 	}
-	if management.Routes == nil || management.Resources == nil || len(management.Routes) != 2 || len(management.Resources) != 2 {
-		t.Fatalf("management registration = %#v, want two authenticated routes and two public resources", management)
+	if len(management.Routes) != 4 || len(management.Resources) != 2 {
+		t.Fatalf("management registration = %#v, want four authenticated routes and two public resources", management)
+	}
+	wantRoutes := map[string]string{
+		"/plugins/token-saver/status":         "GET",
+		"/plugins/token-saver/self-test":      "POST",
+		"/plugins/token-saver/dashboard":      "GET",
+		"/plugins/token-saver/headroom/check": "POST",
+	}
+	for _, route := range management.Routes {
+		if wantMethod, ok := wantRoutes[route.Path]; !ok || route.Method != wantMethod {
+			t.Errorf("unexpected route: %#v", route)
+		}
 	}
 }
 
@@ -139,6 +158,9 @@ func TestRuntimeManagementUsesRealHostFieldNamesAndBase64Bodies(t *testing.T) {
 		[]byte(`"routes"`), []byte(`"resources"`), []byte(`"Method":"GET"`),
 		[]byte(`"Path":"/plugins/token-saver/status"`), []byte(`"Method":"POST"`),
 		[]byte(`"Path":"/plugins/token-saver/self-test"`),
+		[]byte(`"Path":"/plugins/token-saver/dashboard"`),
+		[]byte(`"Path":"/plugins/token-saver/headroom/check"`),
+		[]byte(`"Path":"/headroom"`),
 		[]byte(`"Path":"/headroom/status"`),
 	} {
 		if !bytes.Contains(registrationEnvelope.Result, want) {
