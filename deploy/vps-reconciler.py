@@ -78,6 +78,48 @@ def default_service_runner(action: str, deployment_path: pathlib.Path) -> bool:
         return False
     return True
 
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
+class FileLock:
+    def __init__(self, lock_path: pathlib.Path):
+        self.lock_path = lock_path
+        self.fd = None
+
+    def __enter__(self):
+        if fcntl is None:
+            if sys.platform != "win32":
+                raise RuntimeError("fcntl module required on POSIX systems")
+            # Fail-closed if fcntl unavailable
+            raise RuntimeError("fcntl_unavailable_cannot_acquire_lock")
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        self.fd = open(self.lock_path, "w")
+        try:
+            fcntl.flock(self.fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError) as e:
+            self.fd.close()
+            self.fd = None
+            log("Another reconcile process is currently running; exiting safely without mutating active deployment")
+            raise BlockingIOError("reconcile_already_running") from e
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.fd is not None:
+            try:
+                if fcntl is not None:
+                    fcntl.flock(self.fd.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+            try:
+                self.fd.close()
+            except OSError:
+                pass
+            self.fd = None
+
+
 class Reconciler:
     def __init__(
         self,
@@ -88,6 +130,8 @@ class Reconciler:
         downloader: Optional[Callable[[str, pathlib.Path, str, Optional[int]], None]] = None,
         service_runner: Optional[Callable[[str, pathlib.Path], bool]] = None,
         keep_deployments: int = 5,
+        lock_path: Optional[pathlib.Path] = None,
+        lock_provider: Optional[Callable[[pathlib.Path], Any]] = None,
     ):
         self.deploy_root = deploy_root.resolve()
         self.active_link = active_link
@@ -96,6 +140,8 @@ class Reconciler:
         self.downloader = downloader or default_downloader
         self.service_runner = service_runner or default_service_runner
         self.keep_deployments = keep_deployments
+        self.lock_path = lock_path or (self.state_dir / "reconciler.lock")
+        self.lock_provider = lock_provider or FileLock
 
     def inspect_current_deployment(self) -> Optional[Dict[str, Any]]:
         if not self.active_link.is_symlink() and not self.active_link.exists():
@@ -188,6 +234,10 @@ class Reconciler:
             temp_link.replace(link)
 
     def reconcile(self, manifest: Dict[str, Any]) -> Dict[str, Any]:
+        with self.lock_provider(self.lock_path):
+            return self._reconcile_locked(manifest)
+
+    def _reconcile_locked(self, manifest: Dict[str, Any]) -> Dict[str, Any]:
         self.validate_manifest(manifest)
 
         current_manifest = self.inspect_current_deployment()

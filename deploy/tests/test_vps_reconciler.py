@@ -66,6 +66,29 @@ class MockServiceRunner:
         if action == 'smoke':
             return self.smoke_succeeds
         return True
+
+class MockLockProvider:
+    def __init__(self):
+        self.locked_paths = set()
+    def __call__(self, lock_path: pathlib.Path):
+        return MockLock(str(lock_path.resolve()), self.locked_paths)
+
+class MockLock:
+    def __init__(self, key: str, locked_set: set):
+        self.key = key
+        self.locked_set = locked_set
+        self.acquired = False
+    def __enter__(self):
+        if self.key in self.locked_set:
+            raise BlockingIOError('reconcile_already_running')
+        self.locked_set.add(self.key)
+        self.acquired = True
+        return self
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.acquired:
+            self.locked_set.discard(self.key)
+            self.acquired = False
+
 class TestVPSReconciler(unittest.TestCase):
     def setUp(self):
         self.reconciler = load_reconciler()
@@ -133,6 +156,7 @@ class TestVPSReconciler(unittest.TestCase):
             state_dir=self.state_dir,
             downloader=downloader,
             service_runner=service_runner,
+            lock_provider=MockLockProvider(),
         )
         result = reconciler.reconcile(self.manifest_v2_data)
         self.assertTrue(result["success"])
@@ -168,6 +192,7 @@ class TestVPSReconciler(unittest.TestCase):
             state_dir=self.state_dir,
             downloader=downloader,
             service_runner=service_runner,
+            lock_provider=MockLockProvider(),
         )
         with self.assertRaises(Exception):
             reconciler.reconcile(self.manifest_v2_data)
@@ -185,6 +210,7 @@ class TestVPSReconciler(unittest.TestCase):
             state_dir=self.state_dir,
             downloader=downloader,
             service_runner=service_runner,
+            lock_provider=MockLockProvider(),
         )
         with self.assertRaises(ValueError):
             reconciler.reconcile(bad_manifest)
@@ -207,6 +233,7 @@ class TestVPSReconciler(unittest.TestCase):
             state_dir=self.state_dir,
             downloader=downloader,
             service_runner=service_runner,
+            lock_provider=MockLockProvider(),
         )
         with self.assertRaises(Exception):
             reconciler.reconcile(self.manifest_v2_data)
@@ -230,6 +257,7 @@ class TestVPSReconciler(unittest.TestCase):
             state_dir=self.state_dir,
             downloader=downloader,
             service_runner=service_runner,
+            lock_provider=MockLockProvider(),
         )
         current = reconciler.inspect_current_deployment()
         self.assertIsNotNone(current)
@@ -251,6 +279,7 @@ class TestVPSReconciler(unittest.TestCase):
             state_dir=self.state_dir,
             downloader=downloader,
             service_runner=service_runner,
+            lock_provider=MockLockProvider(),
         )
         with self.assertRaises(ValueError):
             reconciler.reconcile(manifest_v1)
@@ -272,6 +301,7 @@ class TestVPSReconciler(unittest.TestCase):
             state_dir=self.state_dir,
             downloader=downloader,
             service_runner=service_runner,
+            lock_provider=MockLockProvider(),
         )
         reconciler.reconcile(self.manifest_v2_data)
         self.assertTrue((self.state_dir / "config.yaml").is_file())
@@ -302,6 +332,7 @@ class TestVPSReconciler(unittest.TestCase):
             state_dir=self.state_dir,
             downloader=downloader,
             service_runner=service_runner,
+            lock_provider=MockLockProvider(),
             keep_deployments=1,
         )
         reconciler.reconcile(self.manifest_v2_data)
@@ -353,6 +384,7 @@ class TestVPSReconciler(unittest.TestCase):
             state_dir=self.state_dir,
             downloader=downloader,
             service_runner=service_runner,
+            lock_provider=MockLockProvider(),
         )
         with self.assertRaises(ValueError):
             reconciler.reconcile(manifest)
@@ -371,6 +403,7 @@ class TestVPSReconciler(unittest.TestCase):
             state_dir=self.state_dir,
             downloader=downloader,
             service_runner=service_runner,
+            lock_provider=MockLockProvider(),
         )
         with self.assertRaises(ValueError):
             reconciler.reconcile(manifest)
@@ -394,6 +427,7 @@ class TestVPSReconciler(unittest.TestCase):
             state_dir=self.state_dir,
             downloader=downloader,
             service_runner=service_runner,
+            lock_provider=MockLockProvider(),
         )
         with self.assertRaises(ValueError):
             reconciler.reconcile(self.manifest_v2_data)
@@ -413,12 +447,78 @@ class TestVPSReconciler(unittest.TestCase):
             state_dir=self.state_dir,
             downloader=downloader,
             service_runner=service_runner,
+            lock_provider=MockLockProvider(),
         )
         result = reconciler.reconcile(self.manifest_v2_data)
         self.assertTrue(result["success"])
         self.assertEqual(result.get("action"), "noop")
         self.assertEqual(self.active_link.resolve(), initial_dir.resolve())
         self.assertEqual(len(downloader.download_log), 0)
+
+
+    def test_concurrency_lock_blocks_concurrent_instance_and_releases(self):
+        initial_dir = self.create_initial_deployment('dep-initial')
+        urls = {
+            'https://github.com/router-for-me/CLIProxyAPI/releases/download/v7.2.137/CLIProxyAPI_7.2.137_linux_amd64.tar.gz': self.tar_gz_bytes,
+            'https://github.com/jinpeng2700-tech/cpa-plugin-token-saver/releases/download/v1.1.0/token-saver-v1.1.0-linux-amd64.so': self.plugin_bytes,
+            'https://github.com/jinpeng2700-tech/cpa-plugin-token-saver/releases/download/v1.1.0/compat-probe-v1.1.0-linux-amd64': self.probe_bytes,
+            'https://github.com/jinpeng2700-tech/cpa-plugin-token-saver/releases/download/panel-v1.22.6-bridge.1/management.html': self.panel_bytes,
+            'https://github.com/jinpeng2700-tech/cpa-plugin-token-saver/releases/download/panel-v1.22.6-bridge.1/panel-manifest.json': self.panel_manifest_bytes,
+        }
+        lock_provider = MockLockProvider()
+        lock_path = self.state_dir / 'reconciler.lock'
+
+        reconciler2 = None
+        rec2_attempted = False
+        rec2_blocked = False
+
+        def concurrent_downloader(url, target_path, expected_sha256, expected_size=None):
+            nonlocal rec2_attempted, rec2_blocked
+            rec2_attempted = True
+            try:
+                reconciler2.reconcile(self.manifest_v2_data)
+            except BlockingIOError:
+                rec2_blocked = True
+            MockDownloader(urls)(url, target_path, expected_sha256, expected_size)
+
+        reconciler1 = self.reconciler.Reconciler(
+            deploy_root=self.deploy_root,
+            active_link=self.active_link,
+            prev_link=self.prev_link,
+            state_dir=self.state_dir,
+            downloader=concurrent_downloader,
+            service_runner=MockServiceRunner(smoke_succeeds=True),
+            lock_path=lock_path,
+            lock_provider=lock_provider,
+        )
+
+        reconciler2 = self.reconciler.Reconciler(
+            deploy_root=self.deploy_root,
+            active_link=self.active_link,
+            prev_link=self.prev_link,
+            state_dir=self.state_dir,
+            downloader=MockDownloader(urls),
+            service_runner=MockServiceRunner(smoke_succeeds=True),
+            lock_path=lock_path,
+            lock_provider=lock_provider,
+        )
+
+        res1 = reconciler1.reconcile(self.manifest_v2_data)
+        self.assertTrue(res1['success'])
+        self.assertTrue(rec2_attempted)
+        self.assertTrue(rec2_blocked)
+
+        res2 = reconciler2.reconcile(self.manifest_v2_data)
+        self.assertTrue(res2['success'])
+        self.assertEqual(res2.get('action'), 'noop')
+
+    def test_default_file_lock_fails_closed_on_missing_fcntl(self):
+        lock_path = self.state_dir / 'reconciler.lock'
+        file_lock = self.reconciler.FileLock(lock_path)
+        if 'fcntl' not in sys.modules and sys.platform == 'win32':
+            with self.assertRaises((RuntimeError, OSError)):
+                with file_lock:
+                    pass
 
 if __name__ == "__main__":
     unittest.main()

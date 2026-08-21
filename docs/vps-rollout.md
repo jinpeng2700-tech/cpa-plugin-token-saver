@@ -83,6 +83,7 @@ Full/Ultra levels, 24-hour observation, 50–100 requests, and p95/p99 are later
 The repository-owned updater script is `deploy/vps-reconciler.py` (installed on the host as `/root/cliproxyapi-updater.py`).
 
 ### Verification & Reconciliation Rules:
+0. **Cross-process concurrency lock:** The reconciler acquires an exclusive, non-blocking lock (`fcntl.flock(LOCK_EX | LOCK_NB)`) on `/root/cliproxyapi/state/reconciler.lock` before executing downloads or staging. A concurrent run safely fails closed and exits without modifying the active deployment.
 1. **Schema v2 and panel requirement:** Target deployments must provide schema v2 with a valid `panel` object including exact asset hash and tag. If a current active deployment is on schema v1, the reconciler recognizes it during transition lineage, but refuses to accept schema v1 as a new update target.
 2. **Atomic deployment staging:** Downloads official CLI archive, Token Saver `.so`, optional compat probe, patched `management.html` (mode `0600`), and `panel-manifest.json` into a temporary staging folder within `/root/cliproxyapi.deployments/`. The target directory ID embeds CLI version, plugin version, and panel tag (e.g. `dep-cli-7.2.137-plugin-1.1.0-panel-v1.22.6-bridge.1-g4`).
 3. **Fail-closed verification:** If panel SHA mismatch, missing assets, truncated download, or path traversal occurs, staging is aborted and the active symlink `/root/cliproxyapi` remains completely untouched.
