@@ -1,3 +1,4 @@
+import ast
 import hashlib
 import importlib.util
 import io
@@ -9,6 +10,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 from typing import Callable, Optional
 
 FILE_DIR = pathlib.Path(__file__).resolve().parent
@@ -120,6 +122,21 @@ class TestVPSReconciler(unittest.TestCase):
         self.manifest_v2_data = {"schema_version": 2, "verifier_schema": 1, "channel": "stable", "channel_generation": 4, "prior_fingerprint": "sha256:" + "0" * 64, "fingerprint": "sha256:" + "f" * 64, "official": {"repository": "router-for-me/CLIProxyAPI", "release_id": 101, "tag": "v7.2.137", "version": "7.2.137", "asset": {"name": "CLIProxyAPI_7.2.137_linux_amd64.tar.gz", "id": 201, "size": len(self.tar_gz_bytes), "sha256": self.tar_gz_sha256}, "checksums": {"name": "checksums.txt", "id": 202, "size": 100, "sha256": "c" * 64}, "binary_sha256": self.cli_binary_sha256, "provenance": "official-checksum-only"}, "plugin": {"repository": "jinpeng2700-tech/cpa-plugin-token-saver", "release_id": 301, "tag": "v1.1.0", "version": "1.1.0", "source_commit": "e" * 40, "asset": {"name": "token-saver-v1.1.0-linux-amd64.so", "id": 401, "size": len(self.plugin_bytes), "sha256": self.plugin_sha256}, "probe_asset": {"name": "compat-probe-v1.1.0-linux-amd64", "id": 402, "size": len(self.probe_bytes), "sha256": self.probe_sha256}, "attestation": {"repository": "jinpeng2700-tech/cpa-plugin-token-saver", "workflow": ".github/workflows/release.yml", "ref": "refs/tags/v1.1.0", "source_commit": "e" * 40, "issuer": "https://token.actions.githubusercontent.com"}}, "panel": {"repository": "jinpeng2700-tech/cpa-plugin-token-saver", "release_id": 501, "tag": "panel-v1.22.6-bridge.1", "upstream_tag": "v1.22.6", "upstream_commit": "1234567890123456789012345678901234567890", "patch_sha256": "a" * 64, "asset": {"name": "management.html", "id": 601, "size": len(self.panel_bytes), "sha256": self.panel_sha256}, "manifest": {"name": "panel-manifest.json", "id": 602, "size": len(self.panel_manifest_bytes), "sha256": self.panel_manifest_sha256}, "attestation": {"repository": "jinpeng2700-tech/cpa-plugin-token-saver", "workflow": ".github/workflows/release-panel.yml", "ref": "refs/tags/panel-v1.22.6-bridge.1", "source_commit": "d" * 40, "issuer": "https://token.actions.githubusercontent.com"}}, "compatibility": {"schema_version": 1, "plugin": True, "core_only": True, "config_generation": 4, "config_digest": "b" * 64, "scenarios": ["all-off", "rtk", "headroom-rewrite", "headroom-timeout", "caveman", "ponytail", "fixed-order"]}, "approved_attestation": {"repository": "jinpeng2700-tech/cpa-plugin-token-saver", "workflow": ".github/workflows/promote-cliproxyapi.yml", "ref": "refs/heads/main", "source_commit": "c" * 40, "issuer": "https://token.actions.githubusercontent.com"}}
     def tearDown(self):
         self.temp_dir.cleanup()
+    def test_source_parses_as_python_36(self):
+        ast.parse(RECONCILER_PATH.read_text(encoding="utf-8"), filename=str(RECONCILER_PATH), feature_version=(3, 6))
+    def test_service_restart_uses_python36_subprocess_run_arguments(self):
+        calls = []
+
+        def run(args, check=False, stdout=None, stderr=None):
+            calls.append((args, check, stdout, stderr))
+            return type("Result", (), {"returncode": 0})()
+
+        with mock.patch.object(self.reconciler.subprocess, "run", side_effect=run):
+            self.assertTrue(self.reconciler.default_service_runner("restart", self.root))
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1][2], self.reconciler.subprocess.PIPE)
+        self.assertEqual(calls[1][3], self.reconciler.subprocess.PIPE)
     def create_initial_deployment(self, name="initial-dep", schema_version=2):
         dep_dir = self.deploy_root / name
         dep_dir.mkdir(parents=True, mode=0o700)

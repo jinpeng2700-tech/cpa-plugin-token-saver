@@ -59,7 +59,10 @@ def discover_latest_approved_manifest(repository: str, json_loader: Callable[[st
 def sha256_file(path: pathlib.Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as f:
-        while chunk_data := f.read(65536):
+        while True:
+            chunk_data = f.read(65536)
+            if not chunk_data:
+                break
             h.update(chunk_data)
     return h.hexdigest()
 
@@ -73,7 +76,10 @@ def default_downloader(url: str, target_path: pathlib.Path, expected_sha256: str
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "cliproxyapi-updater/1.0"})
         with urllib.request.urlopen(req, timeout=60) as resp, temp_file.open("wb") as out:
-            while chunk_bytes := resp.read(65536):
+            while True:
+                chunk_bytes = resp.read(65536)
+                if not chunk_bytes:
+                    break
                 size += len(chunk_bytes)
                 h.update(chunk_bytes)
                 out.write(chunk_bytes)
@@ -95,7 +101,7 @@ def default_service_runner(action: str, deployment_path: pathlib.Path) -> bool:
     if action == "restart":
         log(f"Restarting service {service_name}")
         subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
-        res = subprocess.run(["systemctl", "--user", "restart", service_name], capture_output=True)
+        res = subprocess.run(["systemctl", "--user", "restart", service_name], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         return res.returncode == 0
     elif action == "smoke":
         log("Running service smoke check")
