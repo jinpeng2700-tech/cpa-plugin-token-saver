@@ -1,0 +1,802 @@
+From 91134dec8fd8d8072aaa26f5eea7860ff7294a9c Mon Sep 17 00:00:00 2001
+From: peng <jinpeng2700@gmail.com>
+Date: Fri, 21 Aug 2026 19:07:13 +0800
+Subject: [PATCH] feat(plugins): proxy authenticated iframe capabilities
+
+---
+ src/features/plugins/PluginResourcePage.tsx   |  23 +-
+ .../plugins/pluginManagementBridge.ts         | 244 +++++++++
+ tests/pluginManagementBridge.test.ts          | 471 ++++++++++++++++++
+ 3 files changed, 737 insertions(+), 1 deletion(-)
+ create mode 100644 src/features/plugins/pluginManagementBridge.ts
+ create mode 100644 tests/pluginManagementBridge.test.ts
+
+diff --git a/src/features/plugins/PluginResourcePage.tsx b/src/features/plugins/PluginResourcePage.tsx
+index 051f035..ab62889 100644
+--- a/src/features/plugins/PluginResourcePage.tsx
++++ b/src/features/plugins/PluginResourcePage.tsx
+@@ -1,4 +1,4 @@
+-import { useCallback, useEffect, useMemo, useState } from 'react';
++import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+ import { useParams } from 'react-router-dom';
+ import { useTranslation } from 'react-i18next';
+ import { EmptyState } from '@/components/ui/EmptyState';
+@@ -7,6 +7,7 @@ import { pluginsApi } from '@/services/api';
+ import { useAuthStore } from '@/stores';
+ import { getErrorMessage, isRecord } from '@/utils/helpers';
+ import type { PluginListResponse } from '@/types';
++import { createPluginManagementBridge, resolveIframeOrigin } from './pluginManagementBridge';
+ import {
+   collectPluginResourceEntries,
+   PLUGIN_RESOURCES_REFRESH_EVENT,
+@@ -34,6 +35,7 @@ export function PluginResourcePage() {
+   const params = useParams<{ pluginId: string; menuIndex: string }>();
+   const connectionStatus = useAuthStore((state) => state.connectionStatus);
+   const apiBase = useAuthStore((state) => state.apiBase);
++  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+ 
+   const [data, setData] = useState<PluginListResponse | null>(null);
+   const [loading, setLoading] = useState(true);
+@@ -87,6 +89,24 @@ export function PluginResourcePage() {
+ 
+   const iframeSrc = resource ? resolvePluginAssetURL(resource.menu.path, apiBase) : '';
+ 
++  useEffect(() => {
++    const iframe = iframeRef.current;
++    if (!connected || !resource || !iframe || !iframeSrc) {
++      return;
++    }
++
++    const expectedOrigin = resolveIframeOrigin(iframeSrc);
++    if (!expectedOrigin) {
++      return;
++    }
++
++    return createPluginManagementBridge({
++      iframe,
++      pluginId: resource.pluginID,
++      expectedOrigin,
++    });
++  }, [connected, iframeSrc, resource]);
++
+   return (
+     <div className={styles.page}>
+       {loading ? (
+@@ -113,6 +133,7 @@ export function PluginResourcePage() {
+         </div>
+       ) : (
+         <iframe
++          ref={iframeRef}
+           className={styles.frame}
+           src={iframeSrc}
+           title={resource.label}
+diff --git a/src/features/plugins/pluginManagementBridge.ts b/src/features/plugins/pluginManagementBridge.ts
+new file mode 100644
+index 0000000..124518c
+--- /dev/null
++++ b/src/features/plugins/pluginManagementBridge.ts
+@@ -0,0 +1,244 @@
++import { isRecord } from '@/utils/helpers';
++import { parseApiErrorResponse } from '@/services/api/apiError';
++import { apiClient as defaultApiClient } from '@/services/api/client';
++
++export const BRIDGE_MSG_HELLO = 'cpa.plugin.management.hello';
++export const BRIDGE_MSG_READY = 'cpa.plugin.management.ready';
++export const BRIDGE_MSG_REQUEST = 'cpa.plugin.management.request';
++export const BRIDGE_MSG_RESPONSE = 'cpa.plugin.management.response';
++export const MAX_BRIDGE_BODY_BYTES = 16 * 1024;
++
++export interface BridgeContext {
++  expectedSource: Window | null;
++  expectedOrigin: string;
++  pluginId: string;
++  inFlightRequestIds?: Set<string>;
++}
++
++export interface ValidatedBridgeRequest {
++  requestId: string;
++  method: 'GET' | 'POST';
++  path: string;
++  body: unknown;
++}
++
++export interface NormalizedBridgeError {
++  status: number;
++  error: {
++    code: string;
++    message: string;
++  };
++}
++
++export interface BridgeApiClient {
++  get<T = unknown>(path: string): Promise<T>;
++  post<T = unknown>(path: string, body?: unknown): Promise<T>;
++}
++
++export interface BridgeEventTarget {
++  addEventListener(type: 'message', listener: (event: MessageEvent) => void): void;
++  removeEventListener(type: 'message', listener: (event: MessageEvent) => void): void;
++}
++
++export interface CreateBridgeOptions {
++  iframe: HTMLIFrameElement;
++  pluginId: string;
++  expectedOrigin: string;
++  apiClient?: BridgeApiClient;
++  eventTarget?: BridgeEventTarget;
++}
++
++export const resolveIframeOrigin = (iframeSrc: string, baseOrigin?: string): string => {
++  if (!iframeSrc) return '';
++  try {
++    const base = baseOrigin
++      ? baseOrigin
++      : typeof window !== 'undefined' && window.location?.href
++        ? window.location.href
++        : undefined;
++    const parsed = base ? new URL(iframeSrc, base) : new URL(iframeSrc);
++    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
++      return parsed.origin;
++    }
++    return '';
++  } catch {
++    return '';
++  }
++};
++
++export const validatePluginManagementHello = (
++  event: {source: unknown; origin: string; data: unknown },
++  context: Pick<BridgeContext, 'expectedSource' | 'expectedOrigin' | 'pluginId'>
++): boolean => {
++  if (!context.expectedSource || event.source !== context.expectedSource) return false;
++  if (!context.expectedOrigin || event.origin !== context.expectedOrigin) return false;
++  if (!isRecord(event.data)) return false;
++  const { type, version, pluginId, ...rest } = event.data;
++  if (type !== BRIDGE_MSG_HELLO || version !== 1 || pluginId !== context.pluginId) return false;
++  if (Object.keys(rest).length > 0) return false;
++  return true;
++};
++
++export const validatePluginManagementRequest = (
++  event: { source: unknown; origin: string; data: unknown },
++  context: BridgeContext
++): ValidatedBridgeRequest | null => {
++  if (!context.expectedSource || event.source !== context.expectedSource) return null;
++  if (!context.expectedOrigin || event.origin !== context.expectedOrigin) return null;
++  if (!isRecord(event.data)) return null;
++  const { type, version, requestId, pluginId, method, path, body, ...rest } = event.data;
++  if (type !== BRIDGE_MSG_REQUEST || version !== 1) return null;
++  if (typeof requestId !== 'string' || !requestId.trim()) return null;
++  if (context.inFlightRequestIds && context.inFlightRequestIds.has(requestId)) return null;
++  if (pluginId !== context.pluginId) return null;
++  if (method !== 'GET' && method !== 'POST') return null;
++  if (typeof path !== 'string') return null;
++  if (Object.keys(rest).length > 0) return null;
++
++  const expectedPrefix = `/v0/management/plugins/${context.pluginId}/`;
++  if (!path.startsWith(expectedPrefix)) return null;
++  if (path.includes('?') || path.includes('#')) return null;
++  if (path.includes('..')) return null;
++
++  if (body !== undefined && body !== null) {
++    try {
++      const serialized = JSON.stringify(body);
++      if (new TextEncoder().encode(serialized).length > MAX_BRIDGE_BODY_BYTES) {
++        return null;
++      }
++    } catch {
++      return null;
++    }
++  }
++
++  return {
++    requestId,
++    method,
++    path,
++    body: body ?? undefined,
++  };
++};
++
++export const normalizeBridgeError = (error: unknown): NormalizedBridgeError => {
++  let status = 500;
++  let code = 'bridge_request_failed';
++  let message = 'Unknown error occurred';
++
++  if (isRecord(error)) {
++    if (typeof error.status === 'number' && error.status >= 400 && error.status < 600) {
++      status = error.status;
++    } else if (isRecord(error.response) && typeof error.response.status === 'number') {
++      status = error.response.status;
++    }
++
++    const responseData = isRecord(error.response) ? error.response.data : error.details ?? error.data;
++    const parsed = parseApiErrorResponse(
++      responseData,
++      typeof error.message === 'string' ? error.message : ''
++    );
++    message = parsed.message || 'Request failed';
++    code =
++      parsed.apiCode ||
++      (typeof error.code === 'string' ? error.code : '') ||
++      'bridge_request_failed';
++  } else if (error instanceof Error) {
++    message = error.message;
++  } else if (typeof error === 'string') {
++    message = error;
++  }
++
++  return {
++    status,
++    error: {
++      code,
++      message,
++    },
++  };
++};
++
++export const createPluginManagementBridge = (options: CreateBridgeOptions): (() => void) => {
++  const { iframe, pluginId, expectedOrigin } = options;
++  const client = options.apiClient || defaultApiClient;
++  const target: BridgeEventTarget | null =
++    options.eventTarget || (typeof window !== 'undefined' ? window : null);
++  let isHandshakeComplete = false;
++  const inFlightRequestIds = new Set<string>();
++
++  if (!target) {
++    return () => {};
++  }
++
++  const handleMessage = async (event: MessageEvent) => {
++    const expectedSource = iframe.contentWindow;
++    if (!expectedSource || event.source !== expectedSource) return;
++    if (!expectedOrigin || event.origin !== expectedOrigin) return;
++
++    if (!isHandshakeComplete) {
++      if (validatePluginManagementHello(event, { expectedSource, expectedOrigin, pluginId })) {
++        isHandshakeComplete = true;
++        expectedSource.postMessage(
++          {
++            type: BRIDGE_MSG_READY,
++            version: 1,
++            pluginId,
++          },
++          expectedOrigin
++        );
++      }
++      return;
++    }
++
++    const request = validatePluginManagementRequest(event, {
++      expectedSource,
++      expectedOrigin,
++      pluginId,
++      inFlightRequestIds,
++    });
++
++    if (!request) return;
++
++    inFlightRequestIds.add(request.requestId);
++    try {
++      let data: unknown;
++      if (request.method === 'GET') {
++        data = await client.get(request.path);
++      } else {
++        data = await client.post(request.path, request.body);
++      }
++
++      expectedSource.postMessage(
++        {
++          type: BRIDGE_MSG_RESPONSE,
++          version: 1,
++          requestId: request.requestId,
++          ok: true,
++          status: 200,
++          data,
++        },
++        expectedOrigin
++      );
++    } catch (err: unknown) {
++      const normalized = normalizeBridgeError(err);
++      expectedSource.postMessage(
++        {
++          type: BRIDGE_MSG_RESPONSE,
++          version: 1,
++          requestId: request.requestId,
++          ok: false,
++          status: normalized.status,
++          data: normalized,
++        },
++        expectedOrigin
++      );
++    } finally {
++      inFlightRequestIds.delete(request.requestId);
++    }
++  };
++
++  target.addEventListener('message', handleMessage);
++
++  return () => {
++    target.removeEventListener('message', handleMessage);
++    inFlightRequestIds.clear();
++  };
++};
+diff --git a/tests/pluginManagementBridge.test.ts b/tests/pluginManagementBridge.test.ts
+new file mode 100644
+index 0000000..4279238
+--- /dev/null
++++ b/tests/pluginManagementBridge.test.ts
+@@ -0,0 +1,471 @@
++import { describe, expect, test } from 'bun:test';
++import {
++  createPluginManagementBridge,
++  normalizeBridgeError,
++  resolveIframeOrigin,
++  validatePluginManagementHello,
++  validatePluginManagementRequest,
++} from '../src/features/plugins/pluginManagementBridge';
++
++describe('plugin management bridge validation', () => {
++  const dummyWindow = {} as Window;
++  const dummyChildWindow = {
++    postMessage: () => {},
++  } as unknown as Window;
++
++  const validContext = {
++    expectedSource: dummyChildWindow,
++    expectedOrigin: 'https://panel.example.com',
++    pluginId: 'token-saver',
++    inFlightRequestIds: new Set<string>(),
++  };
++
++  test('validates exact valid GET request', () => {
++    const event = {
++      source: dummyChildWindow,
++      origin: 'https://panel.example.com',
++      data: {
++        type: 'cpa.plugin.management.request',
++        version: 1,
++        requestId: 'r1',
++        pluginId: 'token-saver',
++        method: 'GET',
++        path: '/v0/management/plugins/token-saver/dashboard',
++      },
++    };
++
++    const result = validatePluginManagementRequest(event, validContext);
++    expect(result).toEqual({
++      requestId: 'r1',
++      method: 'GET',
++      path: '/v0/management/plugins/token-saver/dashboard',
++      body: undefined,
++    });
++  });
++
++  test('validates exact valid POST request with JSON body', () => {
++    const event = {
++      source: dummyChildWindow,
++      origin: 'https://panel.example.com',
++      data: {
++        type: 'cpa.plugin.management.request',
++        version: 1,
++        requestId: 'r2',
++        pluginId: 'token-saver',
++        method: 'POST',
++        path: '/v0/management/plugins/token-saver/headroom/check',
++        body: { test: true },
++      },
++    };
++
++    const result = validatePluginManagementRequest(event, validContext);
++    expect(result).toEqual({
++      requestId: 'r2',
++      method: 'POST',
++      path: '/v0/management/plugins/token-saver/headroom/check',
++      body: { test: true },
++    });
++  });
++
++  test('rejects hello message as a management request', () => {
++    const event = {
++      source: dummyChildWindow,
++      origin: 'https://panel.example.com',
++      data: {
++        type: 'cpa.plugin.management.hello',
++        version: 1,
++        pluginId: 'token-saver',
++      },
++    };
++
++    expect(validatePluginManagementRequest(event, validContext)).toBeNull();
++  });
++
++  test('rejects wrong event.source', () => {
++    const event = {
++      source: dummyWindow,
++      origin: 'https://panel.example.com',
++      data: {
++        type: 'cpa.plugin.management.request',
++        version: 1,
++        requestId: 'r1',
++        pluginId: 'token-saver',
++        method: 'GET',
++        path: '/v0/management/plugins/token-saver/dashboard',
++      },
++    };
++
++    expect(validatePluginManagementRequest(event, validContext)).toBeNull();
++  });
++
++  test('rejects wrong origin', () => {
++    const event = {
++      source: dummyChildWindow,
++      origin: 'https://evil.example.com',
++      data: {
++        type: 'cpa.plugin.management.request',
++        version: 1,
++        requestId: 'r1',
++        pluginId: 'token-saver',
++        method: 'GET',
++        path: '/v0/management/plugins/token-saver/dashboard',
++      },
++    };
++
++    expect(validatePluginManagementRequest(event, validContext)).toBeNull();
++  });
++
++  test('rejects wrong plugin ID', () => {
++    const event = {
++      source: dummyChildWindow,
++      origin: 'https://panel.example.com',
++      data: {
++        type: 'cpa.plugin.management.request',
++        version: 1,
++        requestId: 'r1',
++        pluginId: 'other-plugin',
++        method: 'GET',
++        path: '/v0/management/plugins/other-plugin/dashboard',
++      },
++    };
++
++    expect(validatePluginManagementRequest(event, validContext)).toBeNull();
++  });
++
++  test('rejects disallowed HTTP methods like PUT, DELETE, PATCH', () => {
++    for (const method of ['PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD', 'get', 'post']) {
++      const event = {
++        source: dummyChildWindow,
++        origin: 'https://panel.example.com',
++        data: {
++          type: 'cpa.plugin.management.request',
++          version: 1,
++          requestId: 'r1',
++          pluginId: 'token-saver',
++          method,
++          path: '/v0/management/plugins/token-saver/dashboard',
++        },
++      };
++
++      expect(validatePluginManagementRequest(event, validContext)).toBeNull();
++    }
++  });
++
++  test('rejects non-plugin path /v0/management/config', () => {
++    const event = {
++      source: dummyChildWindow,
++      origin: 'https://panel.example.com',
++      data: {
++        type: 'cpa.plugin.management.request',
++        version: 1,
++        requestId: 'r1',
++        pluginId: 'token-saver',
++        method: 'GET',
++        path: '/v0/management/config',
++      },
++    };
++
++    expect(validatePluginManagementRequest(event, validContext)).toBeNull();
++  });
++
++  test('rejects sibling plugin namespace path', () => {
++    const event = {
++      source: dummyChildWindow,
++      origin: 'https://panel.example.com',
++      data: {
++        type: 'cpa.plugin.management.request',
++        version: 1,
++        requestId: 'r1',
++        pluginId: 'token-saver',
++        method: 'GET',
++        path: '/v0/management/plugins/other-plugin/dashboard',
++      },
++    };
++
++    expect(validatePluginManagementRequest(event, validContext)).toBeNull();
++  });
++
++  test('rejects path traversal attempts', () => {
++    const event = {
++      source: dummyChildWindow,
++      origin: 'https://panel.example.com',
++      data: {
++        type: 'cpa.plugin.management.request',
++        version: 1,
++        requestId: 'r1',
++        pluginId: 'token-saver',
++        method: 'GET',
++        path: '/v0/management/plugins/token-saver/../config',
++      },
++    };
++
++    expect(validatePluginManagementRequest(event, validContext)).toBeNull();
++  });
++
++  test('rejects query strings in path', () => {
++    const event = {
++      source: dummyChildWindow,
++      origin: 'https://panel.example.com',
++      data: {
++        type: 'cpa.plugin.management.request',
++        version: 1,
++        requestId: 'r1',
++        pluginId: 'token-saver',
++        method: 'GET',
++        path: '/v0/management/plugins/token-saver/dashboard?param=1',
++      },
++    };
++
++    expect(validatePluginManagementRequest(event, validContext)).toBeNull();
++  });
++
++  test('rejects body exceeding 16 KiB', () => {
++    const largeString = 'a'.repeat(16 * 1024 + 1);
++    const event = {
++      source: dummyChildWindow,
++      origin: 'https://panel.example.com',
++      data: {
++        type: 'cpa.plugin.management.request',
++        version: 1,
++        requestId: 'r1',
++        pluginId: 'token-saver',
++        method: 'POST',
++        path: '/v0/management/plugins/token-saver/headroom/check',
++        body: { payload: largeString },
++      },
++    };
++
++    expect(validatePluginManagementRequest(event, validContext)).toBeNull();
++  });
++
++  test('accepts body under or equal to 16 KiB', () => {
++    const exactBody = { payload: 'a'.repeat(100) };
++    const event = {
++      source: dummyChildWindow,
++      origin: 'https://panel.example.com',
++      data: {
++        type: 'cpa.plugin.management.request',
++        version: 1,
++        requestId: 'r1',
++        pluginId: 'token-saver',
++        method: 'POST',
++        path: '/v0/management/plugins/token-saver/headroom/check',
++        body: exactBody,
++      },
++    };
++
++    const result = validatePluginManagementRequest(event, validContext);
++    expect(result).not.toBeNull();
++    expect(result?.body).toEqual(exactBody);
++  });
++
++  test('rejects request containing headers or credentials fields', () => {
++    const headersEvent = {
++      source: dummyChildWindow,
++      origin: 'https://panel.example.com',
++      data: {
++        type: 'cpa.plugin.management.request',
++        version: 1,
++        requestId: 'r1',
++        pluginId: 'token-saver',
++        method: 'GET',
++        path: '/v0/management/plugins/token-saver/dashboard',
++        headers: { Authorization: 'Bearer secret' },
++      },
++    };
++    expect(validatePluginManagementRequest(headersEvent, validContext)).toBeNull();
++
++    const credsEvent = {
++      source: dummyChildWindow,
++      origin: 'https://panel.example.com',
++      data: {
++        type: 'cpa.plugin.management.request',
++        version: 1,
++        requestId: 'r1',
++        pluginId: 'token-saver',
++        method: 'GET',
++        path: '/v0/management/plugins/token-saver/dashboard',
++        authorization: 'Bearer secret',
++      },
++    };
++    expect(validatePluginManagementRequest(credsEvent, validContext)).toBeNull();
++  });
++
++  test('rejects duplicate in-flight request ID', () => {
++    const contextWithInFlight = {
++      ...validContext,
++      inFlightRequestIds: new Set(['r1']),
++    };
++
++    const event = {
++      source: dummyChildWindow,
++      origin: 'https://panel.example.com',
++      data: {
++        type: 'cpa.plugin.management.request',
++        version: 1,
++        requestId: 'r1',
++        pluginId: 'token-saver',
++        method: 'GET',
++        path: '/v0/management/plugins/token-saver/dashboard',
++      },
++    };
++
++    expect(validatePluginManagementRequest(event, contextWithInFlight)).toBeNull();
++  });
++});
++
++describe('plugin management hello validation', () => {
++  const dummyChildWindow = {
++    postMessage: () => {},
++  } as unknown as Window;
++
++  const validContext = {
++    expectedSource: dummyChildWindow,
++    expectedOrigin: 'https://panel.example.com',
++    pluginId: 'token-saver',
++  };
++
++  test('accepts valid hello message', () => {
++    const event = {
++      source: dummyChildWindow,
++      origin: 'https://panel.example.com',
++      data: {
++        type: 'cpa.plugin.management.hello',
++        version: 1,
++        pluginId: 'token-saver',
++      },
++    };
++
++    expect(validatePluginManagementHello(event, validContext)).toBe(true);
++  });
++
++  test('rejects invalid hello messages', () => {
++    expect(
++      validatePluginManagementHello(
++        {
++          source: {} as Window,
++          origin: 'https://panel.example.com',
++          data: { type: 'cpa.plugin.management.hello', version: 1, pluginId: 'token-saver' },
++        },
++        validContext
++      )
++    ).toBe(false);
++
++    expect(
++      validatePluginManagementHello(
++        {
++          source: dummyChildWindow,
++          origin: 'https://evil.example.com',
++          data: { type: 'cpa.plugin.management.hello', version: 1, pluginId: 'token-saver' },
++        },
++        validContext
++      )
++    ).toBe(false);
++
++    expect(
++      validatePluginManagementHello(
++        {
++          source: dummyChildWindow,
++          origin: 'https://panel.example.com',
++          data: { type: 'cpa.plugin.management.hello', version: 1, pluginId: 'other-plugin' },
++        },
++        validContext
++      )
++    ).toBe(false);
++  });
++});
++
++describe('resolveIframeOrigin', () => {
++  test('resolves absolute URL origin', () => {
++    expect(resolveIframeOrigin('https://example.com/some/path')).toBe('https://example.com');
++    expect(resolveIframeOrigin('http://127.0.0.1:8080/v0/resource/plugins/token-saver/page')).toBe(
++      'http://127.0.0.1:8080'
++    );
++  });
++
++  test('resolves relative URL origin against base', () => {
++    expect(
++      resolveIframeOrigin('/v0/resource/plugins/token-saver/page', 'https://cpa.example.com/ui/')
++    ).toBe('https://cpa.example.com');
++  });
++
++  test('returns empty string for invalid or non-http URLs', () => {
++    expect(resolveIframeOrigin('')).toBe('');
++    expect(resolveIframeOrigin('javascript:alert(1)')).toBe('');
++    expect(resolveIframeOrigin('data:text/html,<h1>hi</h1>')).toBe('');
++  });
++});
++
++describe('normalizeBridgeError', () => {
++  test('normalizes error without leaking headers, stack, Axios config, or credentials', () => {
++    const axiosLikeError = {
++      name: 'AxiosError',
++      message: 'Request failed with status code 400',
++      code: 'ERR_BAD_REQUEST',
++      config: { headers: { Authorization: 'Bearer secret-key' }, url: '/v0/management/plugins/token-saver/headroom/check' },
++      response: { status: 400, headers: { 'set-cookie': 'session=secret' }, data: { error: 'invalid_headroom_url', message: 'Headroom URL is unreachable' } },
++      stack: 'Error: Request failed...\n    at Object.<anonymous> (/secret/path/app.ts:1:1)',
++    };
++    const normalized = normalizeBridgeError(axiosLikeError);
++    expect(normalized).toEqual({ status: 400, error: { code: 'invalid_headroom_url', message: 'Headroom URL is unreachable' } });
++    const serialized = JSON.stringify(normalized);
++    expect(serialized).not.toContain('secret-key');
++    expect(serialized).not.toContain('set-cookie');
++    expect(serialized).not.toContain('stack');
++    expect(serialized).not.toContain('config');
++  });
++
++  test('handles plain error safely', () => {
++    expect(normalizeBridgeError(new Error('Network timeout'))).toEqual({ status: 500, error: { code: 'bridge_request_failed', message: 'Network timeout' } });
++  });
++});
++
++describe('createPluginManagementBridge lifecycle', () => {
++  test('refuses requests before hello handshake and processes requests after hello', async () => {
++    const listeners: Array<(event: MessageEvent) => void> = [];
++    const eventTarget = {
++      addEventListener: (type: string, listener: (event: MessageEvent) => void) => {
++        if (type === 'message') listeners.push(listener);
++      },
++      removeEventListener: (type: string, listener: (event: MessageEvent) => void) => {
++        const idx = listeners.indexOf(listener);
++        if (idx >= 0) listeners.splice(idx, 1);
++      },
++    };
++    const messagesSent: Array<{ message: unknown; targetOrigin: string }> = [];
++    const childWindow = {
++      postMessage: (message: unknown, targetOrigin: string) => {
++        messagesSent.push({ message, targetOrigin });
++      },
++    } as unknown as Window;
++    const mockIframe = { contentWindow: childWindow } as HTMLIFrameElement;
++    const mockApiClient = {
++      get: async (path: string) => {
++        if (path === '/v0/management/plugins/token-saver/dashboard') return { started_at: '2026-08-21T00:00:00Z', headroom: { enabled: true } };
++        throw new Error('Not found');
++      },
++      post: async () => ({ reachable: true }),
++    };
++    const cleanup = createPluginManagementBridge({
++      iframe: mockIframe,
++      pluginId: 'token-saver',
++      expectedOrigin: 'https://panel.example.com',
++      apiClient: mockApiClient,
++      eventTarget,
++    });
++    const dispatch = (msgEvent: unknown) => {
++      for (const fn of [...listeners]) fn(msgEvent as MessageEvent);
++    };
++    dispatch({ source: childWindow, origin: 'https://panel.example.com', data: { type: 'cpa.plugin.management.request', version: 1, requestId: 'req-before-hello', pluginId: 'token-saver', method: 'GET', path: '/v0/management/plugins/token-saver/dashboard' } });
++    expect(messagesSent).toHaveLength(0);
++    dispatch({ source: childWindow, origin: 'https://panel.example.com', data: { type: 'cpa.plugin.management.hello', version: 1, pluginId: 'token-saver' } });
++    expect(messagesSent).toHaveLength(1);
++    expect(messagesSent[0]).toEqual({ message: { type: 'cpa.plugin.management.ready', version: 1, pluginId: 'token-saver' }, targetOrigin: 'https://panel.example.com' });
++    dispatch({ source: childWindow, origin: 'https://panel.example.com', data: { type: 'cpa.plugin.management.request', version: 1, requestId: 'req-1', pluginId: 'token-saver', method: 'GET', path: '/v0/management/plugins/token-saver/dashboard' } });
++    await new Promise((resolve) => setTimeout(resolve, 20));
++    expect(messagesSent).toHaveLength(2);
++    expect(messagesSent[1]).toEqual({ message: { type: 'cpa.plugin.management.response', version: 1, requestId: 'req-1', ok: true, status: 200, data: { started_at: '2026-08-21T00:00:00Z', headroom: { enabled: true } } }, targetOrigin: 'https://panel.example.com' });
++    cleanup();
++    expect(listeners).toHaveLength(0);
++  });
++});
+-- 
+2.54.0.windows.1
+
