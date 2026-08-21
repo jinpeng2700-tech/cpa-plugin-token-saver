@@ -218,6 +218,13 @@ jobs:
         with:
           name: approved-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: dist
+      - name: Flatten downloaded artifact directory if nested
+        run: |
+          if [ -d "dist/dist" ]; then
+            cp -a dist/dist/* dist/
+            rm -rf dist/dist
+          fi
+          ls -la dist/
       - name: Validate final publication bytes
         run: |
           set -euo pipefail
