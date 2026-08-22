@@ -440,6 +440,57 @@ func lockPromotionArtifacts(selection promotionSelection, paths promotionPaths) 
 	}, nil
 }
 
+func samePromotionCandidate(locked promotionLocked, previous *approvedManifest) bool {
+	if previous == nil || previous.SchemaVersion != 2 {
+		return false
+	}
+	officialAsset := locked.Selection.Official.Assets["archive"]
+	officialChecksums := locked.Selection.Official.Assets["checksums"]
+	pluginAsset := locked.Selection.Plugin.Assets["plugin"]
+	probeAsset := locked.Selection.Plugin.Assets["probe"]
+	panelAsset := locked.Selection.Panel.Assets["asset"]
+	panelManifest := locked.Selection.Panel.Assets["manifest"]
+
+	return previous.Official.ReleaseID == locked.Selection.Official.ReleaseID &&
+		previous.Official.Tag == locked.Selection.Official.Tag &&
+		previous.Official.Version == locked.Selection.Official.Version &&
+		previous.Official.Asset.ID == officialAsset.ID &&
+		previous.Official.Asset.Name == officialAsset.Name &&
+		previous.Official.Asset.Size == officialAsset.Size &&
+		previous.Official.Asset.SHA256 == locked.OfficialArchiveSHA256 &&
+		previous.Official.Checksums.ID == officialChecksums.ID &&
+		previous.Official.Checksums.Name == officialChecksums.Name &&
+		previous.Official.Checksums.Size == officialChecksums.Size &&
+		previous.Official.Checksums.SHA256 == locked.OfficialChecksumsSHA256 &&
+		previous.Official.BinarySHA256 == locked.OfficialBinarySHA256 &&
+		previous.Plugin.ReleaseID == locked.Selection.Plugin.ReleaseID &&
+		previous.Plugin.Tag == locked.Selection.Plugin.Tag &&
+		previous.Plugin.Version == locked.Selection.Plugin.Version &&
+		previous.Plugin.SourceCommit == locked.PluginSourceCommit &&
+		previous.Plugin.Asset.ID == pluginAsset.ID &&
+		previous.Plugin.Asset.Name == pluginAsset.Name &&
+		previous.Plugin.Asset.Size == pluginAsset.Size &&
+		previous.Plugin.Asset.SHA256 == locked.PluginSHA256 &&
+		previous.Plugin.ProbeAsset.ID == probeAsset.ID &&
+		previous.Plugin.ProbeAsset.Name == probeAsset.Name &&
+		previous.Plugin.ProbeAsset.Size == probeAsset.Size &&
+		previous.Plugin.ProbeAsset.SHA256 == locked.ProbeSHA256 &&
+		previous.Panel.ReleaseID == locked.Selection.Panel.ReleaseID &&
+		previous.Panel.Tag == locked.Selection.Panel.Tag &&
+		previous.Panel.UpstreamTag == locked.PanelUpstreamTag &&
+		previous.Panel.UpstreamCommit == locked.PanelUpstreamCommit &&
+		previous.Panel.PatchSHA256 == locked.PanelPatchSHA256 &&
+		previous.Panel.Asset.ID == panelAsset.ID &&
+		previous.Panel.Asset.Name == panelAsset.Name &&
+		previous.Panel.Asset.Size == panelAsset.Size &&
+		previous.Panel.Asset.SHA256 == locked.PanelAssetSHA256 &&
+		previous.Panel.Manifest.ID == panelManifest.ID &&
+		previous.Panel.Manifest.Name == panelManifest.Name &&
+		previous.Panel.Manifest.Size == panelManifest.Size &&
+		previous.Panel.Manifest.SHA256 == locked.PanelManifestSHA256 &&
+		previous.Panel.Attestation.SourceCommit == locked.PanelSourceCommit
+}
+
 func buildPromotionResult(locked promotionLocked, pluginReport, coreReport promotionProbeReport, previous *approvedManifest, sourceCommit string) (promotionResult, error) {
 	if !validLowerCommit(sourceCommit) ||
 		pluginReport.SchemaVersion != 1 || !pluginReport.Compatible || pluginReport.Code != "ok" ||
@@ -527,8 +578,8 @@ func buildPromotionResult(locked promotionLocked, pluginReport, coreReport promo
 		},
 	}
 	manifest.Fingerprint = computeApprovedFingerprint(manifest)
-	if previous != nil && previous.SchemaVersion == 2 && previous.Fingerprint == manifest.Fingerprint {
-		tag := promotionTag(manifest, previous.ChannelGeneration)
+	if previous != nil && previous.SchemaVersion == 2 && (previous.Fingerprint == manifest.Fingerprint || samePromotionCandidate(locked, previous)) {
+		tag := promotionTag(*previous, previous.ChannelGeneration)
 		return promotionResult{Manifest: *previous, Channel: promotionChannel(*previous, tag), Tag: tag}, nil
 	}
 	if _, err := validateApprovedManifest(mustMarshalApprovedManifest(manifest)); err != nil {
@@ -1879,6 +1930,36 @@ func TestPromotionPanelOnlyChangeIncrementsGenerationAndChangesFingerprint(t *te
 		result2.Manifest.PriorFingerprint == nil || *result2.Manifest.PriorFingerprint != result1.Manifest.Fingerprint ||
 		result2.Manifest.Fingerprint == result1.Manifest.Fingerprint {
 		t.Fatalf("panel-only change did not increment generation or change fingerprint: %#v", result2)
+	}
+}
+
+func TestPromotionSameCandidateWithDifferentProbeDigestOrCommitDoesNotRepublish(t *testing.T) {
+	locked := promotionLockedFixtureWithPanel(t, "7.2.138", "1.0.2", "1.22.6", 1)
+	pluginReport1 := validPromotionPluginReport()
+	pluginReport1.ConfigDigest = strings.Repeat("a", 64)
+	coreReport := promotionProbeReport{SchemaVersion: 1, Compatible: true, Code: "ok"}
+	previous := approvedManifestFixture("7.2.137", "1.0.2", 4, "")
+
+	result1, err := buildPromotionResult(locked, pluginReport1, coreReport, previous, strings.Repeat("2", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result1.Publish || result1.Manifest.ChannelGeneration != 5 {
+		t.Fatalf("initial promotion failed: %#v", result1)
+	}
+
+	pluginReport2 := validPromotionPluginReport()
+	pluginReport2.ConfigDigest = strings.Repeat("b", 64)
+
+	result2, err := buildPromotionResult(locked, pluginReport2, coreReport, &result1.Manifest, strings.Repeat("3", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result2.Publish || result2.Manifest.ChannelGeneration != 5 || result2.Manifest.Fingerprint != result1.Manifest.Fingerprint {
+		t.Fatalf("re-promoting same candidate unexpectedly published new generation: %#v", result2)
+	}
+	if result2.Tag != result1.Tag {
+		t.Fatalf("tag mismatch: got %q, want %q", result2.Tag, result1.Tag)
 	}
 }
 
