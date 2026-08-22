@@ -159,7 +159,7 @@ func TestRebuildBundleRoundTripAndSecretRejection(t *testing.T) {
 	input := t.TempDir()
 	for name, body := range map[string]string{
 		"cli-proxy-api":         "\x7fELF\x00sk-false-positive-binary-string\n",
-		"token-saver-v1.1.0.so": "\x7fELF\x00fake plugin\n",
+		"token-saver-v1.1.1.so": "\x7fELF\x00fake plugin\n",
 		"compat-probe":          "\x7fELF\x00fake probe\n",
 		"update-verifier":       "\x7fELF\x00fake verifier\n",
 	} {
@@ -174,7 +174,7 @@ func TestRebuildBundleRoundTripAndSecretRejection(t *testing.T) {
 		assemble,
 		"--input-dir", input,
 		"--output-dir", output,
-		"--deployment-id", "test-7.2.136-1.1.0",
+		"--deployment-id", "test-7.2.136-1.1.1",
 		"--plugin-source-commit", "7be5a808",
 		"--plugin-builder-digest", "sha256:" + strings.Repeat("1", 64),
 		"--glibc-max", "2.3.2",
@@ -224,7 +224,7 @@ func TestRebuildBundleRoundTripAndSecretRejection(t *testing.T) {
 		manifest.CLI.ArchiveSHA256 != "8f9160982bc2f26142f7b76a73fcc50f954c453470d5a6aefa81324ad18da288" {
 		t.Fatalf("unexpected CLI manifest identity: %+v", manifest.CLI)
 	}
-	if manifest.Plugin.Version != "1.1.0" || manifest.Plugin.ABI != 1 || manifest.Plugin.RPCSchema != 3 ||
+	if manifest.Plugin.Version != "1.1.1" || manifest.Plugin.ABI != 1 || manifest.Plugin.RPCSchema != 3 ||
 		manifest.Plugin.SourceCommit != "7be5a808" || manifest.Plugin.Builder == "" || manifest.Plugin.GLIBCMax != "2.3.2" {
 		t.Fatalf("unexpected plugin manifest identity: %+v", manifest.Plugin)
 	}
@@ -271,7 +271,7 @@ func TestRebuildBundleOmitsDedicatedPanelArtifact(t *testing.T) {
 	input := t.TempDir()
 	for name, body := range map[string]string{
 		"cli-proxy-api":         "\x7fELF\x00fake CLI\n",
-		"token-saver-v1.1.0.so": "\x7fELF\x00fake plugin\n",
+		"token-saver-v1.1.1.so": "\x7fELF\x00fake plugin\n",
 		"compat-probe":          "\x7fELF\x00fake probe\n",
 		"update-verifier":       "\x7fELF\x00fake verifier\n",
 	} {
@@ -287,7 +287,7 @@ func TestRebuildBundleOmitsDedicatedPanelArtifact(t *testing.T) {
 		assemble,
 		"--input-dir", input,
 		"--output-dir", output,
-		"--deployment-id", "test-7.2.136-1.1.0",
+		"--deployment-id", "test-7.2.136-1.1.1",
 		"--plugin-source-commit", "7be5a808",
 		"--plugin-builder-digest", "sha256:" + strings.Repeat("1", 64),
 		"--glibc-max", "2.3.2",

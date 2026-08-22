@@ -37,6 +37,7 @@ var nativeMessagePairs = map[Pair]struct{}{
 	{From: "claude", To: "gemini"}:                {},
 	{From: "gemini", To: "gemini"}:                {},
 	{From: "interactions", To: "gemini"}:          {},
+	{From: "openai-response", To: "antigravity"}:  {},
 }
 
 // Eligible reports whether CLIProxyAPI has a verified built-in request

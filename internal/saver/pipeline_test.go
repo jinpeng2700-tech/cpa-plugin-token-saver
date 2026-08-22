@@ -66,6 +66,35 @@ func TestPipelineRunsEnabledStagesInFixedOrder(t *testing.T) {
 	}
 }
 
+func TestPipelineRunsPromptStagesForAntigravityEnvelope(t *testing.T) {
+	service := NewService(Options{})
+	defer service.Close()
+	if err := service.Reconfigure(config.Config{
+		CavemanEnabled: true, CavemanLevel: "lite",
+		PonytailEnabled: true, PonytailLevel: "ultra",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := []byte(`{"project":"project-1","request":{"contents":[{"role":"user","parts":[{"text":"hello"}]}]},"model":"gemini-3.7-flash-high"}`)
+	got := service.Normalize(context.Background(), Request{
+		FromFormat: "openai-response", ToFormat: "antigravity", Model: "gemini-3.7-flash-high", Body: body,
+	})
+	if bytes.Equal(got, body) {
+		t.Fatal("Antigravity prompt stages did not change the payload")
+	}
+	if strings.Count(string(got), "[CPA_TOKEN_SAVER_CAVEMAN_START]") != 1 || strings.Count(string(got), "[CPA_TOKEN_SAVER_PONYTAIL_START]") != 1 {
+		t.Fatalf("Antigravity prompt markers missing or duplicated: %s", got)
+	}
+	if !bytes.Contains(got, []byte(`"project":"project-1"`)) {
+		t.Fatal("Antigravity envelope fields changed")
+	}
+	snapshot := service.Metrics().Snapshot()
+	if snapshot.Stages.Caveman.Executed != 1 || snapshot.Stages.Ponytail.Executed != 1 {
+		t.Fatalf("Antigravity prompt metrics = caveman:%d ponytail:%d, want 1/1", snapshot.Stages.Caveman.Executed, snapshot.Stages.Ponytail.Executed)
+	}
+}
+
 func TestPipelineAllOffIsByteIdenticalAndDoesNotConstructHeadroom(t *testing.T) {
 	var factories atomic.Int32
 	service := NewService(Options{HeadroomFactory: func(config.Config) (HeadroomRunner, func(), error) {

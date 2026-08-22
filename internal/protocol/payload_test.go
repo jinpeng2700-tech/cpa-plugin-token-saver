@@ -121,6 +121,7 @@ func TestPairEligibilityMatchesBuiltInTranslatorRegistrations(t *testing.T) {
 		{From: "openai-response", To: "codex"},
 		{From: "openai", To: "claude"},
 		{From: "openai", To: "gemini"},
+		{From: "openai-response", To: "antigravity"},
 		{From: "interactions", To: "openai-response"},
 	} {
 		if !pair.Eligible() {

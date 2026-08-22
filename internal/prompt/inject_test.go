@@ -108,6 +108,14 @@ func TestInjectSupportedProviderShapes(t *testing.T) {
 			injectedText: geminiInstruction,
 			preservedRaw: []string{`{"inlineData":{"mimeType":"image/png","data":"opaque"}}`, `{"fileData":{"mimeType":"image/png","fileUri":"opaque://image"}}`, `"temperature":1.00`},
 		},
+		{
+			name:         "antigravity-system-instruction",
+			pair:         protocol.Pair{From: "openai-response", To: "antigravity"},
+			body:         `{"project":"project-1","request":{"systemInstruction":{"parts":[{"text":"Existing Antigravity system"},{"opaque":{"n":1e3}}]},"contents":[{"role":"user","parts":[{"text":"Hello world"},{"fileData":{"mimeType":"image/png","fileUri":"opaque://image"}}]}],"tools":[{"functionDeclarations":[{"name":"run","parametersJsonSchema":{"type":"object"}}]}]},"model":"gemini-3.7-flash-high","opaque":{"keep":true}}`,
+			originalText: "Existing Antigravity system",
+			injectedText: antigravityInstruction,
+			preservedRaw: []string{`{"opaque":{"n":1e3}}`, `{"fileData":{"mimeType":"image/png","fileUri":"opaque://image"}}`, `"project":"project-1"`, `"opaque":{"keep":true}`},
+		},
 	}
 
 	for _, test := range tests {
@@ -188,6 +196,43 @@ func TestInjectAppendsToDeveloperMessages(t *testing.T) {
 	text = responsesInstruction(t, gotResponses)
 	if !strings.Contains(text, "keep responses developer") || !strings.Contains(text, wantPonytailStart) {
 		t.Fatalf("Responses developer instruction was not appended: %s", text)
+	}
+}
+
+func TestInjectSupportsResponsesLiteAdditionalToolsItem(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"model":"gpt-5.6-luna","input":[{"type":"additional_tools","role":"developer","tools":[{"type":"function","name":"shell"}]},{"type":"message","role":"developer","content":[{"type":"input_text","text":"keep developer"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]}`)
+	got := Inject(body, protocol.Pair{From: "openai", To: "codex"}, Options{CavemanLevel: "lite", PonytailLevel: "ultra"})
+
+	if bytes.Equal(got, body) {
+		t.Fatal("Responses Lite payload was not injected")
+	}
+	text := responsesInstruction(t, got)
+	if !strings.Contains(text, "keep developer") {
+		t.Fatal("existing developer instruction disappeared")
+	}
+	assertMarkerCount(t, text, wantCavemanStart, wantCavemanEnd, true)
+	assertMarkerCount(t, text, wantPonytailStart, wantPonytailEnd, true)
+	if !bytes.Contains(got, []byte(`{"type":"additional_tools","role":"developer","tools":[{"type":"function","name":"shell"}]}`)) {
+		t.Fatal("additional_tools item changed")
+	}
+}
+
+func TestInjectAntigravityIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"project":"project-1","request":{"contents":[{"role":"user","parts":[{"text":"hello"}]}]},"model":"gemini-3.7-flash-high"}`)
+	pair := protocol.Pair{From: "openai-response", To: "antigravity"}
+	options := Options{CavemanLevel: "lite", PonytailLevel: "ultra"}
+	first := Inject(body, pair, options)
+	second := Inject(first, pair, options)
+
+	if bytes.Equal(first, body) {
+		t.Fatal("Antigravity payload was not injected")
+	}
+	if !bytes.Equal(second, first) {
+		t.Fatal("Antigravity injection was not idempotent")
 	}
 }
 
@@ -405,6 +450,27 @@ func responsesInstruction(t *testing.T, body []byte) string {
 				result.WriteString(part.Text)
 			}
 		}
+	}
+	return result.String()
+}
+
+func antigravityInstruction(t *testing.T, body []byte) string {
+	t.Helper()
+	var payload struct {
+		Request struct {
+			SystemInstruction struct {
+				Parts []struct {
+					Text string `json:"text"`
+				} `json:"parts"`
+			} `json:"systemInstruction"`
+		} `json:"request"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode Antigravity payload: %v", err)
+	}
+	var result strings.Builder
+	for _, part := range payload.Request.SystemInstruction.Parts {
+		result.WriteString(part.Text)
 	}
 	return result.String()
 }

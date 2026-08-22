@@ -109,7 +109,7 @@ func validApprovalDocument(document approvalDocument) bool {
 		document.CLI.ArchiveSHA256 != "8f9160982bc2f26142f7b76a73fcc50f954c453470d5a6aefa81324ad18da288" ||
 		!lowerSHA256Pattern.MatchString(document.CLI.BinarySHA256) ||
 		document.Plugin.ID != "token-saver" ||
-		document.Plugin.Version != "1.1.0" ||
+		document.Plugin.Version != "1.1.1" ||
 		!lowerCommitPattern.MatchString(document.Plugin.SourceCommit) ||
 		!digestPattern.MatchString(document.Plugin.Builder) ||
 		!validGLIBCMax(document.Plugin.GLIBCMax) ||
@@ -124,7 +124,7 @@ func validApprovalDocument(document approvalDocument) bool {
 	}
 	required := map[string]string{
 		"cli-proxy-api": document.CLI.BinarySHA256,
-		"plugins/linux/amd64/token-saver-v1.1.0.so": document.Plugin.SHA256,
+		"plugins/linux/amd64/token-saver-v1.1.1.so": document.Plugin.SHA256,
 	}
 	previous := ""
 	seen := make(map[string]struct{}, len(document.Files))

@@ -599,23 +599,31 @@ func validProviderShape(body []byte, request Request) bool {
 	case "claude":
 		return validRoleArray(root.Get("messages"), map[string]bool{"user": true, "assistant": true})
 	case "gemini":
-		contents := root.Get("contents")
-		if !contents.IsArray() || len(contents.Array()) == 0 {
+		return validGeminiProviderShape(root.Get("contents"))
+	case "antigravity":
+		if !root.Get("request").IsObject() {
 			return false
 		}
-		for _, content := range contents.Array() {
-			if !content.IsObject() || !content.Get("parts").IsArray() {
-				return false
-			}
-			role := content.Get("role").String()
-			if role != "user" && role != "model" {
-				return false
-			}
-		}
-		return true
+		return validGeminiProviderShape(root.Get("request.contents"))
 	default:
 		return false
 	}
+}
+
+func validGeminiProviderShape(contents gjson.Result) bool {
+	if !contents.IsArray() || len(contents.Array()) == 0 {
+		return false
+	}
+	for _, content := range contents.Array() {
+		if !content.IsObject() || !content.Get("parts").IsArray() {
+			return false
+		}
+		role := content.Get("role").String()
+		if role != "user" && role != "model" {
+			return false
+		}
+	}
+	return true
 }
 
 func validRoleArray(items gjson.Result, allowed map[string]bool) bool {

@@ -81,6 +81,8 @@ func injectStage(body []byte, target string, stage promptStage) []byte {
 		return injectClaude(body, block, stage)
 	case "gemini":
 		return injectGemini(body, block, stage)
+	case "antigravity":
+		return injectGeminiAt(body, block, stage, "request.")
 	default:
 		return body
 	}
@@ -103,22 +105,28 @@ func supportedShape(body []byte, target string) bool {
 		system := gjson.GetBytes(body, "system")
 		return !system.Exists() || system.Type == gjson.String || system.IsArray()
 	case "gemini":
-		if !validGeminiContents(gjson.GetBytes(body, "contents")) {
-			return false
-		}
-		camel := gjson.GetBytes(body, "systemInstruction")
-		snake := gjson.GetBytes(body, "system_instruction")
-		if camel.Exists() && snake.Exists() {
-			return false
-		}
-		system := camel
-		if !system.Exists() {
-			system = snake
-		}
-		return !system.Exists() || system.IsObject() && gjson.Get(system.Raw, "parts").IsArray()
+		return validGeminiShape(body, "")
+	case "antigravity":
+		return gjson.GetBytes(body, "request").IsObject() && validGeminiShape(body, "request.")
 	default:
 		return false
 	}
+}
+
+func validGeminiShape(body []byte, prefix string) bool {
+	if !validGeminiContents(gjson.GetBytes(body, prefix+"contents")) {
+		return false
+	}
+	camel := gjson.GetBytes(body, prefix+"systemInstruction")
+	snake := gjson.GetBytes(body, prefix+"system_instruction")
+	if camel.Exists() && snake.Exists() {
+		return false
+	}
+	system := camel
+	if !system.Exists() {
+		system = snake
+	}
+	return !system.Exists() || system.IsObject() && gjson.Get(system.Raw, "parts").IsArray()
 }
 
 func validOpenAIMessages(messages gjson.Result) bool {
@@ -156,6 +164,9 @@ func validResponsesInput(input gjson.Result) bool {
 		}
 		role := item.Get("role")
 		itemType := item.Get("type")
+		if itemType.Type == gjson.String && itemType.String() != "" && itemType.String() != "message" {
+			continue
+		}
 		if role.Exists() {
 			switch role.String() {
 			case "system", "developer", "user", "assistant":
@@ -167,9 +178,7 @@ func validResponsesInput(input gjson.Result) bool {
 			}
 			continue
 		}
-		if itemType.Type != gjson.String || itemType.String() == "" || itemType.String() == "message" {
-			return false
-		}
+		return false
 	}
 	return true
 }
@@ -259,10 +268,14 @@ func injectClaude(body []byte, block string, stage promptStage) []byte {
 }
 
 func injectGemini(body []byte, block string, stage promptStage) []byte {
-	key := "systemInstruction"
+	return injectGeminiAt(body, block, stage, "")
+}
+
+func injectGeminiAt(body []byte, block string, stage promptStage, prefix string) []byte {
+	key := prefix + "systemInstruction"
 	system := gjson.GetBytes(body, key)
 	if !system.Exists() {
-		key = "system_instruction"
+		key = prefix + "system_instruction"
 		system = gjson.GetBytes(body, key)
 	}
 	if system.Exists() {
@@ -274,7 +287,11 @@ func injectGemini(body []byte, block string, stage promptStage) []byte {
 		return appendArrayItem(body, parts, geminiTextPart(block))
 	}
 	value := []byte(`{"parts":[` + string(geminiTextPart(block)) + `]}`)
-	return appendRootField(body, "systemInstruction", value)
+	parent := gjson.ParseBytes(body)
+	if prefix != "" {
+		parent = gjson.GetBytes(body, strings.TrimSuffix(prefix, "."))
+	}
+	return appendObjectField(body, parent, "systemInstruction", value)
 }
 
 func messageInstructionTargets(body []byte, arrayPath, textType string) ([]gjson.Result, []gjson.Result) {
@@ -375,15 +392,18 @@ func appendArrayItem(body []byte, array gjson.Result, item []byte) []byte {
 }
 
 func appendRootField(body []byte, key string, value []byte) []byte {
-	root := gjson.ParseBytes(body)
-	raw := strings.TrimRight(root.Raw, " \t\r\n")
-	if !root.IsObject() || len(raw) < 2 {
+	return appendObjectField(body, gjson.ParseBytes(body), key, value)
+}
+
+func appendObjectField(body []byte, object gjson.Result, key string, value []byte) []byte {
+	raw := strings.TrimRight(object.Raw, " \t\r\n")
+	if !object.IsObject() || len(raw) < 2 {
 		return body
 	}
 	field := append(mustJSON(key), ':')
 	field = append(field, value...)
 	field = append([]byte{','}, field...)
-	return insertBytes(body, root.Index+len(raw)-1, field)
+	return insertBytes(body, object.Index+len(raw)-1, field)
 }
 
 func insertBytes(body []byte, position int, insertion []byte) []byte {
