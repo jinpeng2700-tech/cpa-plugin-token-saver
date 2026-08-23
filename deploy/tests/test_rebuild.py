@@ -125,7 +125,7 @@ class RebuildDeliveryTest(unittest.TestCase):
             inputs.mkdir()
             for name, content in {
                 "cli-proxy-api": b"\x7fELF\x00sk-false-positive-binary-string\n",
-                "token-saver-v1.1.1.so": b"\x7fELF\x00fake plugin\n",
+                "token-saver-v1.2.0.so": b"\x7fELF\x00fake plugin\n",
                 "compat-probe": b"\x7fELF\x00fake probe\n",
                 "update-verifier": b"\x7fELF\x00fake verifier\n",
             }.items():
@@ -140,7 +140,7 @@ class RebuildDeliveryTest(unittest.TestCase):
                 "--output-dir",
                 str(output),
                 "--deployment-id",
-                "test-7.2.136-1.1.1",
+                "test-7.2.136-1.2.0",
                 "--plugin-source-commit",
                 "7be5a808",
                 "--plugin-builder-digest",
@@ -176,7 +176,7 @@ class RebuildDeliveryTest(unittest.TestCase):
             )
             self.assertEqual(
                 {
-                    "version": "1.1.1",
+                    "version": "1.2.0",
                     "abi": 1,
                     "rpc_schema": 3,
                     "source_commit": "7be5a808",

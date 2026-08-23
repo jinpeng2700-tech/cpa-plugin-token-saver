@@ -41,7 +41,7 @@ future_field: preserved
 	if registration.SchemaVersion != abi.RPCSchemaVersion {
 		t.Fatalf("schema_version = %d", registration.SchemaVersion)
 	}
-	if registration.Metadata.Name != "Token Saver" || registration.Metadata.Version != "1.1.1" || registration.Metadata.Author != "Mr.King" {
+	if registration.Metadata.Name != "Token Saver" || registration.Metadata.Version != "1.2.0" || registration.Metadata.Author != "Mr.King" {
 		t.Fatalf("metadata = %#v", registration.Metadata)
 	}
 	if !registration.Capabilities.RequestNormalizer || !registration.Capabilities.ManagementAPI {

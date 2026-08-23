@@ -18,7 +18,7 @@ import (
 func TestReleaseBuildContractIsCentralizedAndPinned(t *testing.T) {
 	makefile := readRepositoryFile(t, "Makefile")
 	for _, want := range []string{
-		"override VERSION := 1.1.1",
+		"override VERSION := 1.2.0",
 		"SOURCE_COMMIT",
 		"CGO_ENABLED=1",
 		"CGO_ENABLED=0",
@@ -168,7 +168,7 @@ func TestReleaseIdentityVerifierRequiresSamePeeledCommit(t *testing.T) {
 	runTestCommand(t, repository, "git", "add", "source.txt")
 	runTestCommand(t, repository, "git", "commit", "-q", "-m", "first")
 	first := strings.TrimSpace(string(runTestCommand(t, repository, "git", "rev-parse", "HEAD")))
-	runTestCommand(t, repository, "git", "tag", "-a", "v1.1.1", "-m", "release")
+	runTestCommand(t, repository, "git", "tag", "-a", "v1.2.0", "-m", "release")
 
 	writeTestFile(t, filepath.Join(repository, "source.txt"), "second\n")
 	runTestCommand(t, repository, "git", "commit", "-qam", "second")
@@ -183,7 +183,7 @@ func TestReleaseIdentityVerifierRequiresSamePeeledCommit(t *testing.T) {
 	}
 	writeMetadata(first)
 	script := filepath.Join(repositoryRoot(t), "scripts", "verify-release-identity.sh")
-	command := exec.Command("sh", script, first, first, metadata, remote, "v1.1.1")
+	command := exec.Command("sh", script, first, first, metadata, remote, "v1.2.0")
 	command.Dir = repository
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("matching release identity rejected: %v\n%s", err, output)
@@ -202,7 +202,7 @@ func TestReleaseIdentityVerifierRequiresSamePeeledCommit(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			writeMetadata(tt.metadata)
-			command := exec.Command("sh", script, tt.event, tt.build, metadata, remote, "v1.1.1")
+			command := exec.Command("sh", script, tt.event, tt.build, metadata, remote, "v1.2.0")
 			command.Dir = repository
 			if output, err := command.CombinedOutput(); err == nil || !strings.Contains(string(output), "release commit identity mismatch") {
 				t.Fatalf("mismatch result: err=%v output=%s", err, output)
@@ -218,10 +218,10 @@ func TestReleaseFinalizerEmitsPortableMetadataAndChecksums(t *testing.T) {
 	wantFiles := []string{
 		"GLIBC_REQUIREMENTS.txt",
 		"SHA256SUMS",
-		"compat-probe-v1.1.1-linux-amd64",
+		"compat-probe-v1.2.0-linux-amd64",
 		"release-metadata.json",
-		"token-saver-v1.1.1-linux-amd64.so",
-		"update-verifier-v1.1.1-linux-amd64",
+		"token-saver-v1.2.0-linux-amd64.so",
+		"update-verifier-v1.2.0-linux-amd64",
 	}
 	entries, err := os.ReadDir(dist)
 	if err != nil {
@@ -252,7 +252,7 @@ func TestReleaseFinalizerEmitsPortableMetadataAndChecksums(t *testing.T) {
 	if err := json.Unmarshal(raw, &metadata); err != nil {
 		t.Fatalf("decode release metadata: %v", err)
 	}
-	if metadata.Version != "1.1.1" || metadata.Tag != "v1.1.1" ||
+	if metadata.Version != "1.2.0" || metadata.Tag != "v1.2.0" ||
 		metadata.SourceCommit != strings.Repeat("a", 40) || metadata.Platform != "linux-amd64" ||
 		metadata.ABI != 1 || metadata.RPC != 3 || metadata.GLIBCMax != "2.32" {
 		t.Fatalf("release metadata = %#v", metadata)
@@ -305,7 +305,7 @@ func TestReleaseWorkflowPinsVersionHostAndLinuxAMD64(t *testing.T) {
 	workflow := readRepositoryFile(t, ".github/workflows/release.yml")
 	for _, want := range []string{
 		`tags:`,
-		`- "v1.1.1"`,
+		`- "v1.2.0"`,
 		"v7.2.137",
 		"linux-amd64",
 	} {
@@ -353,9 +353,9 @@ func releaseFinalizerFixture(t *testing.T, glibc string, dynamicHelper, interpHe
 
 	dist := t.TempDir()
 	for _, name := range []string{
-		"token-saver-v1.1.1-linux-amd64.so",
-		"compat-probe-v1.1.1-linux-amd64",
-		"update-verifier-v1.1.1-linux-amd64",
+		"token-saver-v1.2.0-linux-amd64.so",
+		"compat-probe-v1.2.0-linux-amd64",
+		"update-verifier-v1.2.0-linux-amd64",
 	} {
 		writeTestFile(t, filepath.Join(dist, name), name+"\n")
 	}
@@ -403,7 +403,7 @@ esac
 func runReleaseFinalizer(t *testing.T, dist string, env []string, wantSuccess bool) []byte {
 	t.Helper()
 	script := filepath.Join(repositoryRoot(t), "scripts", "finalize-release.sh")
-	command := exec.Command("sh", script, dist, "1.1.1", strings.Repeat("a", 40))
+	command := exec.Command("sh", script, dist, "1.2.0", strings.Repeat("a", 40))
 	command.Env = env
 	output, err := command.CombinedOutput()
 	if wantSuccess && err != nil {
