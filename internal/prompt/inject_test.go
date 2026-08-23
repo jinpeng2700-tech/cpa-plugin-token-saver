@@ -18,7 +18,7 @@ const (
 	wantPonytailEnd   = "[CPA_TOKEN_SAVER_PONYTAIL_END]"
 )
 
-func TestPromptFacesMatch9Router055(t *testing.T) {
+func TestPromptFaceSnapshots(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -34,9 +34,9 @@ func TestPromptFacesMatch9Router055(t *testing.T) {
 		{name: "caveman-wenyan-lite", level: "wenyan-lite", bytes: 1704, sha256: "18ab72a145a80dd9b98ee30986e86c70fdc913c507f3fd684745f753930a112c", get: Caveman},
 		{name: "caveman-wenyan", level: "wenyan", bytes: 1809, sha256: "3d19b1bba036d2c54785b24004ba42b9ccc241cca9156ca733577f9a7171881b", get: Caveman},
 		{name: "caveman-wenyan-ultra", level: "wenyan-ultra", bytes: 1711, sha256: "e708c17b3a3157b6b28b00f8202a6bc83c15f36cadf89f9c950851e1c31a31e3", get: Caveman},
-		{name: "ponytail-lite", level: "lite", bytes: 1562, sha256: "57c36180dcb5f87e449a345fcf7fb08b21f884805a7e741572080698000ee38b", get: Ponytail},
-		{name: "ponytail-full", level: "full", bytes: 1568, sha256: "72041b1df7ac174d48bf307d72246c46777b4d1c6f5e0d65c0412a0ab60d01fb", get: Ponytail},
-		{name: "ponytail-ultra", level: "ultra", bytes: 1612, sha256: "a60de848e4708a5c56765752934270e31219b81a1fb9e7812b9ef8a075a9c139", get: Ponytail},
+		{name: "ponytail-lite", level: "lite", bytes: 1899, sha256: "0eafe3886b03bd397cc695aa86a76f24833f757c0ded374faaa3ff14ac02042b", get: Ponytail},
+		{name: "ponytail-full", level: "full", bytes: 1905, sha256: "32e031696b08a29f4e1266650d1d908117266fbee7fdba46262aeaac5ff7e6b2", get: Ponytail},
+		{name: "ponytail-ultra", level: "ultra", bytes: 1949, sha256: "ccabefd9553ca6576fb04a340eeb78824b765be1f03ead1774f9ee8f4c7ffff4", get: Ponytail},
 	}
 
 	for _, test := range tests {
@@ -47,12 +47,10 @@ func TestPromptFacesMatch9Router055(t *testing.T) {
 			if !ok {
 				t.Fatalf("prompt %q is missing", test.level)
 			}
-			if len([]byte(got)) != test.bytes {
-				t.Fatalf("prompt byte length = %d, want %d", len([]byte(got)), test.bytes)
-			}
 			sum := sha256.Sum256([]byte(got))
-			if gotHash := hex.EncodeToString(sum[:]); gotHash != test.sha256 {
-				t.Fatalf("prompt SHA-256 = %s, want %s", gotHash, test.sha256)
+			gotHash := hex.EncodeToString(sum[:])
+			if len([]byte(got)) != test.bytes || gotHash != test.sha256 {
+				t.Fatalf("prompt snapshot = %d bytes, SHA-256 %s; want %d bytes, SHA-256 %s", len([]byte(got)), gotHash, test.bytes, test.sha256)
 			}
 		})
 	}
@@ -62,6 +60,28 @@ func TestPromptFacesMatch9Router055(t *testing.T) {
 	}
 	if _, ok := Ponytail("invalid"); ok {
 		t.Fatal("invalid Ponytail level unexpectedly accepted")
+	}
+}
+
+func TestPonytailTracksOfficial490Rules(t *testing.T) {
+	for _, level := range []string{"lite", "full", "ultra"} {
+		prompt, ok := Ponytail(level)
+		if !ok {
+			t.Fatalf("Ponytail(%q) is missing", level)
+		}
+		for _, want := range []string{
+			"Already in this codebase?",
+			"trace the real flow end to end",
+			"Bug fix = root cause, not symptom",
+			"Ponytail governs what you build, not how you talk",
+		} {
+			if !strings.Contains(prompt, want) {
+				t.Errorf("Ponytail(%q) missing %q", level, want)
+			}
+		}
+		if len([]byte(prompt)) > 2048 {
+			t.Errorf("Ponytail(%q) = %d bytes, want <= 2048", level, len([]byte(prompt)))
+		}
 	}
 }
 
