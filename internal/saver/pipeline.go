@@ -562,7 +562,9 @@ func validRTKTransition(before, after []byte, pair protocol.Pair) bool {
 		if beforeSlots[index].ResultID != afterSlots[index].ResultID || beforeSlots[index].Kind != afterSlots[index].Kind || beforeSlots[index].Error != afterSlots[index].Error {
 			return false
 		}
-		replacements[index] = afterSlots[index].Text
+		if beforeSlots[index].Text != afterSlots[index].Text {
+			replacements[index] = afterSlots[index].Text
+		}
 	}
 	return bytes.Equal(beforeView.Rewrite(replacements), after)
 }

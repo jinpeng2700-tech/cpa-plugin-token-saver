@@ -6,7 +6,7 @@ FUZZTIME ?= 10s
 SOURCE_COMMIT ?=
 SOURCE_REF ?= HEAD
 
-override VERSION := 1.2.1
+override VERSION := 1.2.2
 override GOOS := linux
 override GOARCH := amd64
 

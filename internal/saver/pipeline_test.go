@@ -3,6 +3,7 @@ package saver
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"sync"
@@ -13,6 +14,43 @@ import (
 	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/headroom"
 	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/prompt"
 )
+
+func TestPipelineExecutesRTKForCodexCustomToolOutputEnvelope(t *testing.T) {
+	rawOutput := strings.Repeat("RTK_PROBE_20260823 repeated-line\n", 120)
+	inner, errInner := json.Marshal(map[string]any{
+		"chunk_id":          "abc123",
+		"wall_time_seconds": 1.25,
+		"process_exit_code": 0,
+		"output":            rawOutput,
+	})
+	if errInner != nil {
+		t.Fatal(errInner)
+	}
+	quotedInner, errQuoted := json.Marshal(string(inner))
+	if errQuoted != nil {
+		t.Fatal(errQuoted)
+	}
+	body := []byte(`{"input":[{"type":"function_call_output","call_id":"call_opaque","output":"<opaque>"},{"type":"custom_tool_call_output","call_id":"call_probe","output":` + string(quotedInner) + `}]}`)
+
+	service := NewService(Options{})
+	defer service.Close()
+	if errConfigure := service.Reconfigure(config.Config{RTKEnabled: true}); errConfigure != nil {
+		t.Fatal(errConfigure)
+	}
+	got := service.Normalize(context.Background(), Request{
+		FromFormat: "openai-response", ToFormat: "codex", Model: "codex-test", Body: body,
+	})
+	if len(got) >= len(body) {
+		t.Fatalf("Normalize() did not keep the RTK compression: before=%d after=%d", len(body), len(got))
+	}
+	if !bytes.Contains(got, []byte(`"output":"<opaque>"`)) {
+		t.Fatalf("Normalize() changed untouched JSON bytes: %s", got)
+	}
+	metrics := service.Metrics().Snapshot().Stages.RTK
+	if metrics.Executed != 1 || metrics.FailOpen != 0 {
+		t.Fatalf("RTK metrics = %#v, want one execution and no fail-open", metrics)
+	}
+}
 
 func TestDefaultHeadroomRunnerSupportsPassiveSnapshot(t *testing.T) {
 	runner, closeRunner, err := defaultHeadroomFactory(config.Defaults())
