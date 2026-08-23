@@ -72,6 +72,23 @@ func TestViewFindsOnlyProviderToolResultTextSlots(t *testing.T) {
 	}
 }
 
+func TestViewFindsCodexCustomToolOutputTextSlots(t *testing.T) {
+	body := []byte(`{"input":[{"type":"custom_tool_call_output","call_id":"call_1","output":[{"type":"input_text","text":"meta"},{"type":"output_text","text":"body"},{"type":"input_image","image_url":"data:image/png;base64,AQID"}]},{"type":"function_call_output","call_id":"call_2","output":"function"},{"type":"local_shell_call_output","call_id":"call_3","output":"shell"},{"type":"apply_patch_call_output","call_id":"call_4","output":"patch"}]}`)
+	view, ok := View(body, Pair{From: "openai-response", To: "codex"})
+	if !ok {
+		t.Fatal("View() did not recognize Codex Responses payload")
+	}
+	slots := view.Slots()
+	if len(slots) != 5 || slots[0].Text != "meta" || slots[1].Text != "body" || slots[2].Text != "function" || slots[3].Text != "shell" || slots[4].Text != "patch" {
+		t.Fatalf("slots = %#v", slots)
+	}
+	got := view.Rewrite(map[int]string{1: "compact"})
+	want := []byte(`{"input":[{"type":"custom_tool_call_output","call_id":"call_1","output":[{"type":"input_text","text":"meta"},{"type":"output_text","text":"compact"},{"type":"input_image","image_url":"data:image/png;base64,AQID"}]},{"type":"function_call_output","call_id":"call_2","output":"function"},{"type":"local_shell_call_output","call_id":"call_3","output":"shell"},{"type":"apply_patch_call_output","call_id":"call_4","output":"patch"}]}`)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("Rewrite() changed opaque Codex fields:\n got %s\nwant %s", got, want)
+	}
+}
+
 func TestViewMarksErrorsAndPreservesBypassBytes(t *testing.T) {
 	body := []byte("  {\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"e1\",\"is_error\":true,\"content\":\"failure\"}]}]}  \n")
 	view, ok := View(body, Pair{From: "openai", To: "claude"})

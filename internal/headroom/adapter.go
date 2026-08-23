@@ -174,6 +174,12 @@ func projectResponses(body []byte) (*projection, error) {
 	if !ok || len(input) == 0 {
 		return nil, fmt.Errorf("missing input")
 	}
+	for _, rawItem := range input {
+		item, okItem := rawItem.(map[string]any)
+		if okItem && responsesOutputType(item["type"]) {
+			return projectResponsesOutputs(body, input)
+		}
+	}
 	view := &projection{}
 	for itemIndex, rawItem := range input {
 		item, okItem := rawItem.(map[string]any)
@@ -254,6 +260,62 @@ func projectResponses(body []byte) (*projection, error) {
 		}
 	}
 	return view, nil
+}
+
+func projectResponsesOutputs(body []byte, input []any) (*projection, error) {
+	view := &projection{}
+	for itemIndex, rawItem := range input {
+		item, okItem := rawItem.(map[string]any)
+		if !okItem || !responsesOutputType(item["type"]) {
+			continue
+		}
+		callID, okCallID := item["call_id"].(string)
+		if !okCallID || callID == "" {
+			continue
+		}
+		add := func(path, text string) error {
+			messageIndex := len(view.messages)
+			view.messages = append(view.messages, map[string]any{
+				"role": "tool", "tool_call_id": callID, "content": text,
+			})
+			return view.addTarget(body, path, messageIndex, -1, text)
+		}
+		output, exists := item["output"]
+		if !exists {
+			continue
+		}
+		switch typed := output.(type) {
+		case string:
+			if errTarget := add(fmt.Sprintf("input.%d.output", itemIndex), typed); errTarget != nil {
+				return nil, errTarget
+			}
+		case []any:
+			for blockIndex, rawBlock := range typed {
+				block, okBlock := rawBlock.(map[string]any)
+				if !okBlock || (block["type"] != "input_text" && block["type"] != "output_text") {
+					continue
+				}
+				text, okText := block["text"].(string)
+				if !okText {
+					continue
+				}
+				path := fmt.Sprintf("input.%d.output.%d.text", itemIndex, blockIndex)
+				if errTarget := add(path, text); errTarget != nil {
+					return nil, errTarget
+				}
+			}
+		}
+	}
+	return view, nil
+}
+
+func responsesOutputType(value any) bool {
+	switch value {
+	case "custom_tool_call_output", "function_call_output", "local_shell_call_output", "apply_patch_call_output":
+		return true
+	default:
+		return false
+	}
 }
 
 func projectClaude(body []byte) (*projection, error) {

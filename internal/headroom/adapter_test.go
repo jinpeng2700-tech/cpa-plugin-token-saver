@@ -102,6 +102,54 @@ func TestAdapterResponsesMessageOnlySuccess(t *testing.T) {
 	}
 }
 
+func TestAdapterResponsesToolOutputsPreserveOpaqueItems(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"model":"codex-test","input":[{"type":"reasoning","id":"r1","encrypted_content":"opaque"},{"type":"message","role":"user","content":[{"type":"input_text","text":"keep user"}]},{"type":"custom_tool_call_output","call_id":"call_1","output":[{"type":"input_text","text":"Chunk ID: abc"},{"type":"output_text","text":"very long custom output"},{"type":"input_image","image_url":"data:image/png;base64,AQID"}]},{"type":"function_call_output","call_id":"call_2","output":"very long function output"},{"type":"local_shell_call_output","call_id":"call_3","output":"very long shell output"},{"type":"apply_patch_call_output","call_id":"call_4","output":"very long patch output"}],"parallel_tool_calls":true}`)
+	adapter, closeServer := adapterWithHandler(t, func(writer http.ResponseWriter, request *http.Request) {
+		messages := readWireMessages(t, request)
+		if len(messages) != 5 {
+			t.Fatalf("projected message count = %d, want 5: %#v", len(messages), messages)
+		}
+		for index, wantID := range []string{"call_1", "call_1", "call_2", "call_3", "call_4"} {
+			message, ok := messages[index].(map[string]any)
+			if !ok || message["role"] != "tool" || message["tool_call_id"] != wantID {
+				t.Fatalf("projected message[%d] = %#v", index, messages[index])
+			}
+		}
+		setMessageStringContent(t, messages[1], "custom summary")
+		setMessageStringContent(t, messages[2], "function summary")
+		setMessageStringContent(t, messages[3], "shell summary")
+		setMessageStringContent(t, messages[4], "patch summary")
+		writeMessages(t, writer, messages)
+	})
+	defer closeServer()
+
+	output, outcome := adapter.Apply(context.Background(), body, protocol.Pair{From: "openai-response", To: "codex"}, "codex-test")
+	if outcome != OutcomeApplied {
+		t.Fatalf("outcome = %q", outcome)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(output, &got); err != nil {
+		t.Fatal(err)
+	}
+	items := got["input"].([]any)
+	if items[0].(map[string]any)["encrypted_content"] != "opaque" || items[1].(map[string]any)["content"].([]any)[0].(map[string]any)["text"] != "keep user" {
+		t.Fatalf("opaque prefix changed: %#v", items[:2])
+	}
+	custom := items[2].(map[string]any)
+	parts := custom["output"].([]any)
+	if custom["call_id"] != "call_1" || parts[0].(map[string]any)["text"] != "Chunk ID: abc" || parts[1].(map[string]any)["text"] != "custom summary" || parts[2].(map[string]any)["image_url"] != "data:image/png;base64,AQID" {
+		t.Fatalf("custom output changed incorrectly: %#v", custom)
+	}
+	function := items[3].(map[string]any)
+	shell := items[4].(map[string]any)
+	patch := items[5].(map[string]any)
+	if function["call_id"] != "call_2" || function["output"] != "function summary" || shell["output"] != "shell summary" || patch["output"] != "patch summary" || got["parallel_tool_calls"] != true {
+		t.Fatalf("function output or top-level fields changed: %#v", got)
+	}
+}
+
 func TestAdapterClaudeSuccessPreservesSystemToolsAndBlockOrder(t *testing.T) {
 	t.Parallel()
 
@@ -161,7 +209,7 @@ func TestAdapterBypassesUnsupportedPayloadsByteIdenticallyWithoutNetwork(t *test
 	}{
 		{name: "gemini", pair: protocol.Pair{From: "openai", To: "gemini"}, body: []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`), want: OutcomeUnsupportedFormat},
 		{name: "unknown pair", pair: protocol.Pair{From: "plugin", To: "openai"}, body: []byte(`{"messages":[{"role":"user","content":"hello"}]}`), want: OutcomeUnsupportedFormat},
-		{name: "responses tool", pair: protocol.Pair{From: "openai", To: "codex"}, body: []byte(`{"input":[{"type":"function_call_output","call_id":"c1","output":"x"}]}`), want: OutcomeUnsupportedStructure},
+		{name: "responses tool missing call id", pair: protocol.Pair{From: "openai", To: "codex"}, body: []byte(`{"input":[{"type":"function_call_output","output":"x"}]}`), want: OutcomeUnsupportedStructure},
 		{name: "responses reasoning", pair: protocol.Pair{From: "openai", To: "codex"}, body: []byte(`{"input":[{"type":"reasoning","summary":[]}]}`), want: OutcomeUnsupportedStructure},
 		{name: "responses image", pair: protocol.Pair{From: "openai", To: "codex"}, body: []byte(`{"input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:x"}]}]}`), want: OutcomeUnsupportedStructure},
 		{name: "chat image", pair: protocol.Pair{From: "openai", To: "openai"}, body: []byte(`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:x"}}]}]}`), want: OutcomeUnsupportedStructure},
