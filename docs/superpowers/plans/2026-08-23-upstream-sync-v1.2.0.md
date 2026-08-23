@@ -154,8 +154,7 @@ feat(prompt): sync Ponytail v4.9.0 rules
 ### Task 3: Token Saver v1.2.0 release identity
 
 **Files:**
-- Modify every tracked plugin-version occurrence found by
-  `rg -n --hidden "1\\.1\\.1|v1\\.1\\.1"`, excluding the dependency
+- Modify every tracked occurrence of the previous plugin version, excluding the dependency
   `github.com/tidwall/match v1.1.1` in `go.mod` and `go.sum`.
 
 **Interfaces:**

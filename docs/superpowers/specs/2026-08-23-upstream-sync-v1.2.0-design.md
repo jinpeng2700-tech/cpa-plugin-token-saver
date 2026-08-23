@@ -18,7 +18,7 @@ adopt the useful Ponytail v4.9.0 behavior, and prepare Token Saver v1.2.0.
   causes across callers.
 - Keep all three Ponytail levels and the current CPA injection markers.
 - Keep Ponytail prompts below 2,048 UTF-8 bytes per level.
-- Bump plugin release identity from 1.1.1 to 1.2.0 without changing ABI 1 or
+- Bump plugin release identity to 1.2.0 without changing ABI 1 or
   RPC schema 3.
 
 ## Headroom boundary

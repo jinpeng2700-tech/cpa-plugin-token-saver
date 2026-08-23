@@ -59,7 +59,7 @@ find "$temporary" -type d -exec chmod 0700 {} +
 find "$temporary" -type f -exec chmod 0600 {} +
 chmod 0700 \
     "$temporary/cli-proxy-api" \
-    "$temporary/plugins/linux/amd64/token-saver-v1.1.1.so" \
+    "$temporary/plugins/linux/amd64/token-saver-v1.2.0.so" \
     "$temporary/tools/compat-probe" \
     "$temporary/tools/update-verifier" \
     "$temporary/deploy/stage-release.sh" \
