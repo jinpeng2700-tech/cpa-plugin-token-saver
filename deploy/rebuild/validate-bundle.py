@@ -32,7 +32,7 @@ SECRET_MARKERS = (
 PLACEHOLDERS = (b"REPLACE_", b"CHANGEME", b"REQUIRED", b"${", b"<")
 ELF_EXECUTABLES = {
     "cli-proxy-api",
-    "plugins/linux/amd64/token-saver-v1.2.0.so",
+    "plugins/linux/amd64/token-saver-v1.2.1.so",
     "tools/compat-probe",
     "tools/update-verifier",
 }
@@ -130,7 +130,7 @@ def validate_identity(manifest):
     )
     if (
         plugin.get("id") != "token-saver"
-        or plugin.get("version") != "1.2.0"
+        or plugin.get("version") != "1.2.1"
         or plugin.get("abi") != 1
         or plugin.get("rpc_schema") != 3
         or not COMMIT.fullmatch(str(plugin.get("source_commit", "")))
@@ -201,7 +201,7 @@ def validate_bundle(root):
         fail("manifest does not cover complete bundle file set")
     for relative, digest in {
         "cli-proxy-api": manifest["cli"]["binary_sha256"],
-        "plugins/linux/amd64/token-saver-v1.2.0.so": manifest["plugin"]["sha256"],
+        "plugins/linux/amd64/token-saver-v1.2.1.so": manifest["plugin"]["sha256"],
     }.items():
         if listed_hashes.get(relative) != digest:
             fail(f"identity hash mismatch: {relative}")

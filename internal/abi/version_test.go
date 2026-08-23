@@ -6,8 +6,8 @@ import (
 )
 
 func TestPluginVersionIsPinnedToRelease(t *testing.T) {
-	if PluginVersion != "1.2.0" {
-		t.Fatalf("PluginVersion = %q, want 1.2.0", PluginVersion)
+	if PluginVersion != "1.2.1" {
+		t.Fatalf("PluginVersion = %q, want 1.2.1", PluginVersion)
 	}
 }
 

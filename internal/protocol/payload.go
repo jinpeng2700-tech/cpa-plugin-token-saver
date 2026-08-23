@@ -202,7 +202,12 @@ func (p *Payload) openAIResponses() bool {
 	}
 	for i, item := range input.Array() {
 		base := "input." + indexString(i)
-		if !item.IsObject() || stringAt(p.raw, base+".type") != "function_call_output" {
+		if !item.IsObject() {
+			continue
+		}
+		switch stringAt(p.raw, base+".type") {
+		case "custom_tool_call_output", "function_call_output", "local_shell_call_output", "apply_patch_call_output":
+		default:
 			continue
 		}
 		resultID := stringAt(p.raw, base+".call_id")
@@ -221,7 +226,8 @@ func (p *Payload) openAIResponses() bool {
 		}
 		for j, block := range output.Array() {
 			blockPath := outputPath + "." + indexString(j)
-			if block.IsObject() && stringAt(p.raw, blockPath+".type") == "input_text" {
+			blockType := stringAt(p.raw, blockPath+".type")
+			if block.IsObject() && (blockType == "input_text" || blockType == "output_text") {
 				p.add(gjson.GetBytes(p.raw, blockPath+".text"), resultID, SlotOpenAIResponses, errorResult)
 			}
 		}

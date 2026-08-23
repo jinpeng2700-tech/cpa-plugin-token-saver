@@ -28,7 +28,7 @@ func TestRealCandidateDispatch(t *testing.T) {
 		t.Fatalf("real candidate compatibility failed with stable code %q", report.Code)
 	}
 	wantScenarios := []string{"all-off", "rtk", "headroom-rewrite", "headroom-timeout", "caveman", "ponytail", "fixed-order"}
-	if report.PluginID != "token-saver" || report.PluginVersion != "1.2.0" || report.MarkerCount != 1 ||
+	if report.PluginID != "token-saver" || report.PluginVersion != "1.2.1" || report.MarkerCount != 1 ||
 		report.ConfigGeneration == 0 || report.ConfigDigest == "" || !slices.Equal(report.Scenarios, wantScenarios) {
 		t.Fatalf("real dispatch evidence is incomplete: %#v", report)
 	}

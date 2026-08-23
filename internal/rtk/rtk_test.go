@@ -43,6 +43,72 @@ func TestApplyCompressesFourProviderPayloadsWithoutChangingResultIdentity(t *tes
 	}
 }
 
+func TestApplyCompressesCodexCustomToolOutputEnvelope(t *testing.T) {
+	rawOutput := strings.Repeat("RTK_PROBE_20260823 repeated-line\n", 120)
+	inner, err := json.Marshal(map[string]any{
+		"chunk_id":          "abc123",
+		"wall_time_seconds": 1.25,
+		"process_exit_code": 0,
+		"output":            rawOutput,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"input": []any{map[string]any{
+			"type":    "custom_tool_call_output",
+			"call_id": "call_probe",
+			"output": []any{
+				map[string]any{"type": "input_text", "text": "Chunk ID: abc123\nWall time: 1.25 seconds"},
+				map[string]any{"type": "input_text", "text": string(inner)},
+				map[string]any{"type": "input_image", "image_url": "data:image/png;base64,AQID"},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := Apply(body, protocol.Pair{From: "openai-response", To: "codex"})
+	if len(got) >= len(body) {
+		t.Fatalf("Apply() did not shrink nested Codex output: before=%d after=%d", len(body), len(got))
+	}
+	var payload struct {
+		Input []struct {
+			CallID string `json:"call_id"`
+			Output []struct {
+				Type     string `json:"type"`
+				Text     string `json:"text"`
+				ImageURL string `json:"image_url"`
+			} `json:"output"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(got, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Input) != 1 || payload.Input[0].CallID != "call_probe" || len(payload.Input[0].Output) != 3 {
+		t.Fatalf("Responses structure changed: %#v", payload)
+	}
+	if payload.Input[0].Output[0].Text != "Chunk ID: abc123\nWall time: 1.25 seconds" || payload.Input[0].Output[2].ImageURL != "data:image/png;base64,AQID" {
+		t.Fatalf("opaque output parts changed: %#v", payload.Input[0].Output)
+	}
+	var envelope struct {
+		ChunkID         string  `json:"chunk_id"`
+		WallTimeSeconds float64 `json:"wall_time_seconds"`
+		ProcessExitCode int     `json:"process_exit_code"`
+		Output          string  `json:"output"`
+	}
+	if err := json.Unmarshal([]byte(payload.Input[0].Output[1].Text), &envelope); err != nil {
+		t.Fatalf("nested envelope is invalid: %v", err)
+	}
+	if envelope.ChunkID != "abc123" || envelope.WallTimeSeconds != 1.25 || envelope.ProcessExitCode != 0 {
+		t.Fatalf("nested envelope metadata changed: %#v", envelope)
+	}
+	if !strings.Contains(envelope.Output, "duplicate lines") || strings.Count(envelope.Output, "RTK_PROBE_20260823") != 1 {
+		t.Fatalf("nested output was not deduplicated: %q", envelope.Output)
+	}
+}
+
 func TestApplyPreservesParallelOrderOpaqueBlocksAndErrors(t *testing.T) {
 	diff := longDiff(160)
 	quoted, _ := json.Marshal(diff)

@@ -4,18 +4,18 @@
 
 ## Token Saver release contract
 
-Stable plugin release `v1.2.0` is built from the tagged commit archive, never from the working tree. The pinned release container combines Go `1.26.5` with Debian Bullseye glibc `2.31`; release validation rejects a plugin whose highest required GLIBC symbol exceeds `2.32` and rejects either helper when its ELF dynamic section contains `NEEDED`.
+Stable plugin release `v1.2.1` is built from the tagged commit archive, never from the working tree. The pinned release container combines Go `1.26.5` with Debian Bullseye glibc `2.31`; release validation rejects a plugin whose highest required GLIBC symbol exceeds `2.32` and rejects either helper when its ELF dynamic section contains `NEEDED`.
 
 The immutable Linux amd64 release contains exactly:
 
-- `token-saver-v1.2.0-linux-amd64.so`
-- `compat-probe-v1.2.0-linux-amd64`
-- `update-verifier-v1.2.0-linux-amd64`
+- `token-saver-v1.2.1-linux-amd64.so`
+- `compat-probe-v1.2.1-linux-amd64`
+- `update-verifier-v1.2.1-linux-amd64`
 - `GLIBC_REQUIREMENTS.txt`
 - `release-metadata.json`
 - `SHA256SUMS`
 
-`release-metadata.json` binds version `1.2.0`, tag `v1.2.0`, full source commit, platform `linux-amd64`, ABI `1`, RPC `3`, and observed maximum GLIBC requirement. `SHA256SUMS` covers every release file except itself. The release workflow grants write permission only to the final job after the read-only compatibility job passes.
+`release-metadata.json` binds version `1.2.1`, tag `v1.2.1`, full source commit, platform `linux-amd64`, ABI `1`, RPC `3`, and observed maximum GLIBC requirement. `SHA256SUMS` covers every release file except itself. The release workflow grants write permission only to the final job after the read-only compatibility job passes.
 
 ## Host matrix
 
