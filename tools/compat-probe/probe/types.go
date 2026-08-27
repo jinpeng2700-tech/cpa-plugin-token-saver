@@ -8,7 +8,7 @@ import (
 const (
 	SchemaVersion   = 1
 	RequiredPlugin  = "token-saver"
-	RequiredVersion = "1.2.2"
+	RequiredVersion = "1.2.3"
 	CavemanMarker   = "[CPA_TOKEN_SAVER_CAVEMAN_START]"
 	PonytailMarker  = "[CPA_TOKEN_SAVER_PONYTAIL_START]"
 )

@@ -41,7 +41,7 @@ future_field: preserved
 	if registration.SchemaVersion != abi.RPCSchemaVersion {
 		t.Fatalf("schema_version = %d", registration.SchemaVersion)
 	}
-	if registration.Metadata.Name != "Token Saver" || registration.Metadata.Version != "1.2.2" || registration.Metadata.Author != "Mr.King" {
+	if registration.Metadata.Name != "Token Saver" || registration.Metadata.Version != "1.2.3" || registration.Metadata.Author != "Mr.King" {
 		t.Fatalf("metadata = %#v", registration.Metadata)
 	}
 	if !registration.Capabilities.RequestNormalizer || !registration.Capabilities.ManagementAPI {
@@ -139,6 +139,30 @@ future_field: preserved
 		if wantMethod, ok := wantRoutes[route.Path]; !ok || route.Method != wantMethod {
 			t.Errorf("unexpected route: %#v", route)
 		}
+	}
+}
+
+func TestRuntimeRegistrationAcceptsHostSchema4AndAdvertisesSchema3(t *testing.T) {
+	runtimeState := abi.NewRuntime()
+	t.Cleanup(runtimeState.Shutdown)
+
+	rawRegister, registerStatus := runtimeState.Call(
+		abi.MethodPluginRegister,
+		lifecycleJSONForSchema(t, nil, 4),
+	)
+	if registerStatus != abi.CallStatusOK {
+		t.Fatalf("plugin.register status = %d, envelope = %s", registerStatus, rawRegister)
+	}
+	registerEnvelope := decodeEnvelope(t, rawRegister)
+	if !registerEnvelope.OK {
+		t.Fatalf("plugin.register envelope = %#v", registerEnvelope)
+	}
+	var registration abi.Registration
+	if errDecode := json.Unmarshal(registerEnvelope.Result, &registration); errDecode != nil {
+		t.Fatalf("decode registration: %v", errDecode)
+	}
+	if registration.SchemaVersion != 3 {
+		t.Fatalf("registration schema_version = %d, want 3", registration.SchemaVersion)
 	}
 }
 
@@ -475,11 +499,15 @@ func validateDynamicABIReport(report dynamicABIReport) error {
 }
 
 func lifecycleJSON(t *testing.T, configYAML []byte) []byte {
+	return lifecycleJSONForSchema(t, configYAML, abi.RPCSchemaVersion)
+}
+
+func lifecycleJSONForSchema(t *testing.T, configYAML []byte, schemaVersion uint32) []byte {
 	t.Helper()
 	raw, errMarshal := json.Marshal(struct {
 		ConfigYAML    []byte `json:"config_yaml"`
 		SchemaVersion uint32 `json:"schema_version"`
-	}{ConfigYAML: configYAML, SchemaVersion: abi.RPCSchemaVersion})
+	}{ConfigYAML: configYAML, SchemaVersion: schemaVersion})
 	if errMarshal != nil {
 		t.Fatalf("marshal lifecycle request: %v", errMarshal)
 	}

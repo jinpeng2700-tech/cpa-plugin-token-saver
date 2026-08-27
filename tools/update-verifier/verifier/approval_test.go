@@ -15,7 +15,7 @@ func validApproval() Approval {
 			Arch:    "linux-amd64",
 		},
 		Plugin: ApprovedPlugin{
-			Version: "1.2.2",
+			Version: "1.2.3",
 			SHA256:  strings.Repeat("b", 64),
 			ABI:     1,
 			RPC:     3,
@@ -25,7 +25,7 @@ func validApproval() Approval {
 
 func TestParseApprovalRejectsMissingInvalidAndUnknownData(t *testing.T) {
 	valid := validApproval()
-	validJSON := `{"schema_version":2,"verifier_schema":1,"bundle":{"deployment_id":"test-7.2.136-1.2.2","source_commit":"7be5a808","builder_digest":"sha256:` + strings.Repeat("1", 64) + `"},"cli":{"tag":"v7.2.136","archive_sha256":"8f9160982bc2f26142f7b76a73fcc50f954c453470d5a6aefa81324ad18da288","binary_sha256":"` + valid.CLI.SHA256 + `","arch":"linux-amd64"},"plugin":{"id":"token-saver","version":"1.2.2","abi":1,"rpc_schema":3,"source_commit":"7be5a808","builder_digest":"sha256:` + strings.Repeat("1", 64) + `","glibc_max":"2.3.2","sha256":"` + valid.Plugin.SHA256 + `"},"files":[{"path":"cli-proxy-api","sha256":"` + valid.CLI.SHA256 + `","mode":"0700"},{"path":"plugins/linux/amd64/token-saver-v1.2.2.so","sha256":"` + valid.Plugin.SHA256 + `","mode":"0700"}],"manifest_exclusions":["approved-artifacts.json","SHA256SUMS"]}`
+	validJSON := `{"schema_version":2,"verifier_schema":1,"bundle":{"deployment_id":"test-7.2.136-1.2.3","source_commit":"7be5a808","builder_digest":"sha256:` + strings.Repeat("1", 64) + `"},"cli":{"tag":"v7.2.136","archive_sha256":"8f9160982bc2f26142f7b76a73fcc50f954c453470d5a6aefa81324ad18da288","binary_sha256":"` + valid.CLI.SHA256 + `","arch":"linux-amd64"},"plugin":{"id":"token-saver","version":"1.2.3","abi":1,"rpc_schema":3,"source_commit":"7be5a808","builder_digest":"sha256:` + strings.Repeat("1", 64) + `","glibc_max":"2.3.2","sha256":"` + valid.Plugin.SHA256 + `"},"files":[{"path":"cli-proxy-api","sha256":"` + valid.CLI.SHA256 + `","mode":"0700"},{"path":"plugins/linux/amd64/token-saver-v1.2.3.so","sha256":"` + valid.Plugin.SHA256 + `","mode":"0700"}],"manifest_exclusions":["approved-artifacts.json","SHA256SUMS"]}`
 
 	for _, tt := range []struct {
 		name string
