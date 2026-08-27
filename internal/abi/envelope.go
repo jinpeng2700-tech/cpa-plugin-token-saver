@@ -16,6 +16,8 @@ import (
 const (
 	ABIVersion       uint32 = 1
 	RPCSchemaVersion uint32 = 3
+	// ponytail: schema 4 adds WebSocket observation only; advertise schema 4 when Token Saver implements that capability.
+	MaxLifecycleRequestSchemaVersion uint32 = 4
 
 	CallStatusOK    = 0
 	CallStatusError = 1
@@ -37,7 +39,7 @@ const (
 // PluginVersion is a build identity seam. Release builds override it with
 // -ldflags -X so the runtime status and root-owned approval describe the same
 // artifact rather than relying on a versioned filename alone.
-var PluginVersion = "1.2.2"
+var PluginVersion = "1.2.3"
 
 // Envelope is the RPC3 response wrapper consumed by CLIProxyAPI.
 type Envelope struct {
@@ -288,7 +290,7 @@ func decodeLifecycleRequest(raw []byte) (LifecycleRequest, error) {
 	if errDecode := json.Unmarshal(raw, &request); errDecode != nil {
 		return LifecycleRequest{}, fmt.Errorf("decode lifecycle request: %w", errDecode)
 	}
-	if request.SchemaVersion > RPCSchemaVersion {
+	if request.SchemaVersion > MaxLifecycleRequestSchemaVersion {
 		return LifecycleRequest{}, fmt.Errorf("RPC schema version %d is not supported", request.SchemaVersion)
 	}
 	return request, nil
