@@ -12,8 +12,8 @@ var (
 )
 
 // parsePluginFilename mirrors the Linux subset of CLIProxyAPI's discovery
-// rules. Keeping this exact is load-bearing: token-saver-v1.2.3.so is plugin
-// ID token-saver, while cpa-plugin-token-saver-v1.2.3.so is a different ID.
+// rules. Keeping this exact is load-bearing: token-saver-v1.2.4.so is plugin
+// ID token-saver, while cpa-plugin-token-saver-v1.2.4.so is a different ID.
 func parsePluginFilename(path string) (string, string, bool) {
 	base := filepath.Base(path)
 	if !strings.HasSuffix(strings.ToLower(base), ".so") {

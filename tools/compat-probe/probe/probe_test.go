@@ -22,12 +22,12 @@ func TestParsePluginFilenameMatchesHostRules(t *testing.T) {
 		wantVersion string
 		wantOK      bool
 	}{
-		{name: "versioned release", filename: "token-saver-v1.2.3-linux-amd64.so", wantID: "token-saver", wantVersion: "1.2.3-linux-amd64", wantOK: true},
+		{name: "versioned release", filename: "token-saver-v1.2.4-linux-amd64.so", wantID: "token-saver", wantVersion: "1.2.4-linux-amd64", wantOK: true},
 		{name: "unversioned host file", filename: "token-saver.so", wantID: "token-saver", wantOK: true},
-		{name: "wrong plugin id", filename: "cpa-plugin-token-saver-v1.2.3.so", wantID: "cpa-plugin-token-saver", wantVersion: "1.2.3", wantOK: true},
-		{name: "leading v is not a host version", filename: "token-saver-vv1.2.3.so", wantID: "token-saver-vv1.2.3", wantOK: true},
-		{name: "wrong extension", filename: "token-saver-v1.2.3.dll", wantOK: false},
-		{name: "invalid id", filename: "token saver-v1.2.3.so", wantOK: false},
+		{name: "wrong plugin id", filename: "cpa-plugin-token-saver-v1.2.4.so", wantID: "cpa-plugin-token-saver", wantVersion: "1.2.4", wantOK: true},
+		{name: "leading v is not a host version", filename: "token-saver-vv1.2.4.so", wantID: "token-saver-vv1.2.4", wantOK: true},
+		{name: "wrong extension", filename: "token-saver-v1.2.4.dll", wantOK: false},
+		{name: "invalid id", filename: "token saver-v1.2.4.so", wantOK: false},
 	}
 
 	for _, tt := range tests {
@@ -187,7 +187,7 @@ func TestRunClassifiesCandidateExitWithoutLeakingPaths(t *testing.T) {
 		}
 	}
 	tempDir := t.TempDir()
-	pluginPath := filepath.Join(tempDir, "token-saver-v1.2.3-linux-amd64.so")
+	pluginPath := filepath.Join(tempDir, "token-saver-v1.2.4-linux-amd64.so")
 	if errWrite := os.WriteFile(pluginPath, []byte("not-a-real-plugin"), 0o600); errWrite != nil {
 		t.Fatal(errWrite)
 	}
