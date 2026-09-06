@@ -6,17 +6,17 @@ import (
 )
 
 func TestPluginVersionIsPinnedToRelease(t *testing.T) {
-	if PluginVersion != "1.2.4" {
-		t.Fatalf("PluginVersion = %q, want 1.2.4", PluginVersion)
+	if PluginVersion != "1.2.5" {
+		t.Fatalf("PluginVersion = %q, want 1.2.5", PluginVersion)
 	}
 }
 
 func TestPluginRegistrationUsesInjectedBuildVersion(t *testing.T) {
 	original := PluginVersion
-	PluginVersion = "1.2.4"
+	PluginVersion = "1.2.5"
 	t.Cleanup(func() { PluginVersion = original })
 
-	if got := pluginRegistration().Metadata.Version; got != "1.2.4" {
+	if got := pluginRegistration().Metadata.Version; got != "1.2.5" {
 		t.Fatalf("registration version = %q, want injected build version", got)
 	}
 }
