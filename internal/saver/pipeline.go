@@ -190,18 +190,18 @@ func (service *Service) Normalize(ctx context.Context, request Request) (result 
 	defer release()
 	defer func() {
 		if recover() != nil {
-			service.metrics.Record(metrics.StagePipeline, metrics.OutcomeFailOpen, len(original), len(original), 0)
+			service.record(metrics.StagePipeline, metrics.OutcomeFailOpen, len(original), len(original), 0, request)
 			result = original
 		}
 	}()
 
 	cfg := state.config
 	if !cfg.RTKEnabled && !cfg.HeadroomEnabled && !cfg.CavemanEnabled && !cfg.PonytailEnabled {
-		service.recordAllBypassed(len(original))
+		service.recordAllBypassed(len(original), request)
 		return original
 	}
 	if !cfg.AllowsModel(request.Model) || len(original) == 0 || len(original) > maxProviderPayloadBytes || !validProviderShape(original, request) {
-		service.metrics.Record(metrics.StagePipeline, metrics.OutcomeBypassed, len(original), len(original), 0)
+		service.record(metrics.StagePipeline, metrics.OutcomeBypassed, len(original), len(original), 0, request)
 		return original
 	}
 
@@ -216,30 +216,30 @@ func (service *Service) Normalize(ctx context.Context, request Request) (result 
 		})
 		if errDedupe != nil {
 			working = original
-			service.metrics.Record(metrics.StagePipeline, metrics.OutcomeFailOpen, len(original), len(original), 0)
+			service.record(metrics.StagePipeline, metrics.OutcomeFailOpen, len(original), len(original), 0, request)
 		} else {
 			working = intermediate
 			if hit {
-				service.metrics.Record(metrics.StageRTK, metrics.OutcomeBypassed, len(original), len(original), 0)
-				service.metrics.Record(metrics.StageHeadroom, metrics.OutcomeBypassed, len(working), len(working), 0)
+				service.record(metrics.StageRTK, metrics.OutcomeBypassed, len(original), len(original), 0, request)
+				service.record(metrics.StageHeadroom, metrics.OutcomeBypassed, len(working), len(working), 0, request)
 			}
 		}
 	} else {
 		working = service.runLocalStage(ctx, metrics.StageRTK, cfg.RTKEnabled, working, request, cfg, service.options.RTK)
-		service.metrics.Record(metrics.StageHeadroom, metrics.OutcomeBypassed, len(working), len(working), 0)
+		service.record(metrics.StageHeadroom, metrics.OutcomeBypassed, len(working), len(working), 0, request)
 	}
 	working = service.runLocalStage(ctx, metrics.StageCaveman, cfg.CavemanEnabled, working, request, cfg, service.options.Caveman)
 	working = service.runLocalStage(ctx, metrics.StagePonytail, cfg.PonytailEnabled, working, request, cfg, service.options.Ponytail)
 
 	if !validProviderShape(working, request) || service.options.ValidateFinal != nil && !service.options.ValidateFinal(working, request) {
-		service.metrics.Record(metrics.StagePipeline, metrics.OutcomeFailOpen, len(original), len(original), 0)
+		service.record(metrics.StagePipeline, metrics.OutcomeFailOpen, len(original), len(original), 0, request)
 		return original
 	}
 	outcome := metrics.OutcomeExecuted
 	if bytes.Equal(working, original) {
 		outcome = metrics.OutcomeBypassed
 	}
-	service.metrics.Record(metrics.StagePipeline, outcome, len(original), len(working), 0)
+	service.record(metrics.StagePipeline, outcome, len(original), len(working), 0, request)
 	return working
 }
 
@@ -402,12 +402,12 @@ func (service *Service) runLocalStage(ctx context.Context, stage metrics.Stage, 
 	saved := cloneBytes(body)
 	started := service.options.Now()
 	if !enabled {
-		service.metrics.Record(stage, metrics.OutcomeBypassed, len(saved), len(saved), service.options.Now().Sub(started))
+		service.record(stage, metrics.OutcomeBypassed, len(saved), len(saved), service.options.Now().Sub(started), request)
 		return saved
 	}
 	defer func() {
 		if recover() != nil {
-			service.metrics.Record(stage, metrics.OutcomeFailOpen, len(saved), len(saved), service.options.Now().Sub(started))
+			service.record(stage, metrics.OutcomeFailOpen, len(saved), len(saved), service.options.Now().Sub(started), request)
 			result = saved
 		}
 	}()
@@ -416,14 +416,14 @@ func (service *Service) runLocalStage(ctx context.Context, stage metrics.Stage, 
 	stageRequest.Body = cloneBytes(request.Body)
 	output, errApply := apply(ctx, stageInput, stageRequest, cfg)
 	if errApply != nil || len(output) == 0 || !service.validStage(stage, saved, output, request, cfg) {
-		service.metrics.Record(stage, metrics.OutcomeFailOpen, len(saved), len(saved), service.options.Now().Sub(started))
+		service.record(stage, metrics.OutcomeFailOpen, len(saved), len(saved), service.options.Now().Sub(started), request)
 		return saved
 	}
 	outcome := metrics.OutcomeExecuted
 	if bytes.Equal(saved, output) {
 		outcome = metrics.OutcomeBypassed
 	}
-	service.metrics.Record(stage, outcome, len(saved), len(output), service.options.Now().Sub(started))
+	service.record(stage, outcome, len(saved), len(output), service.options.Now().Sub(started), request)
 	return cloneBytes(output)
 }
 
@@ -431,12 +431,12 @@ func (service *Service) runHeadroomStage(ctx context.Context, body []byte, reque
 	saved := cloneBytes(body)
 	started := service.options.Now()
 	if !state.config.HeadroomEnabled || state.headroom == nil {
-		service.metrics.Record(metrics.StageHeadroom, metrics.OutcomeBypassed, len(saved), len(saved), service.options.Now().Sub(started))
+		service.record(metrics.StageHeadroom, metrics.OutcomeBypassed, len(saved), len(saved), service.options.Now().Sub(started), request)
 		return saved
 	}
 	defer func() {
 		if recover() != nil {
-			service.metrics.Record(metrics.StageHeadroom, metrics.OutcomeFailOpen, len(saved), len(saved), service.options.Now().Sub(started))
+			service.record(metrics.StageHeadroom, metrics.OutcomeFailOpen, len(saved), len(saved), service.options.Now().Sub(started), request)
 			result = saved
 		}
 	}()
@@ -448,10 +448,10 @@ func (service *Service) runHeadroomStage(ctx context.Context, body []byte, reque
 		if metricOutcome == metrics.OutcomeExecuted || metricOutcome == metrics.OutcomeBypassed {
 			metricOutcome = metrics.OutcomeFailOpen
 		}
-		service.metrics.Record(metrics.StageHeadroom, metricOutcome, len(saved), len(saved), service.options.Now().Sub(started))
+		service.record(metrics.StageHeadroom, metricOutcome, len(saved), len(saved), service.options.Now().Sub(started), request)
 		return saved
 	}
-	service.metrics.Record(metrics.StageHeadroom, metricOutcome, len(saved), len(output), service.options.Now().Sub(started))
+	service.record(metrics.StageHeadroom, metricOutcome, len(saved), len(output), service.options.Now().Sub(started), request)
 	return cloneBytes(output)
 }
 
@@ -478,8 +478,14 @@ func (service *Service) validStage(stage metrics.Stage, before, after []byte, re
 	return service.options.ValidateStage == nil || service.options.ValidateStage(stage, before, after, request)
 }
 
-func (service *Service) recordAllBypassed(size int) {
+func (service *Service) record(stage metrics.Stage, outcome metrics.Outcome, inputBytes, outputBytes int, duration time.Duration, request Request) {
+	service.metrics.Record(stage, outcome, inputBytes, outputBytes, duration)
+	service.metrics.RecordRoute(stage, outcome, request.FromFormat, request.ToFormat)
+}
+
+func (service *Service) recordAllBypassed(size int, request Request) {
 	service.metrics.RecordAllBypassed(size)
+	service.metrics.RecordAllBypassedRoute(request.FromFormat, request.ToFormat)
 }
 
 func metricForHeadroom(outcome headroom.Outcome, input, output []byte) metrics.Outcome {

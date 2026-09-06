@@ -4,14 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/config"
 	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/headroom"
+	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/metrics"
 	"github.com/jinpeng2700-tech/cpa-plugin-token-saver/internal/prompt"
 )
 
@@ -130,6 +134,116 @@ func TestPipelineRunsPromptStagesForAntigravityEnvelope(t *testing.T) {
 	snapshot := service.Metrics().Snapshot()
 	if snapshot.Stages.Caveman.Executed != 1 || snapshot.Stages.Ponytail.Executed != 1 {
 		t.Fatalf("Antigravity prompt metrics = caveman:%d ponytail:%d, want 1/1", snapshot.Stages.Caveman.Executed, snapshot.Stages.Ponytail.Executed)
+	}
+}
+
+func TestPipelineProjectsAntigravityRTKAndHeadroomBypassesByRoute(t *testing.T) {
+	service := NewService(Options{
+		HeadroomFactory: func(config.Config) (HeadroomRunner, func(), error) {
+			return &headroomRunnerFunc{apply: func(_ context.Context, body []byte, _ Request) ([]byte, headroom.Outcome) {
+				return body, headroom.OutcomeUnsupportedFormat
+			}}, func() {}, nil
+		},
+	})
+	defer service.Close()
+	if err := service.Reconfigure(config.Config{
+		RTKEnabled: true, HeadroomEnabled: true,
+		CavemanEnabled: true, CavemanLevel: "lite",
+		PonytailEnabled: true, PonytailLevel: "ultra",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := []byte(`{"project":"project-1","request":{"contents":[{"role":"user","parts":[{"text":"hello"}]}]},"model":"gemini-3.8-flash-high"}`)
+	service.Normalize(context.Background(), Request{
+		FromFormat: "openai-response", ToFormat: "antigravity", Model: "gemini-3.8-flash-high", Body: body,
+	})
+
+	want := []metrics.RouteOutcomeSnapshot{
+		{
+			FromFormat: "openai-response",
+			ToFormat:   "antigravity",
+			Stages: metrics.RouteStageProjection{
+				Pipeline: metrics.OutcomeProjection{Executed: 1},
+				RTK:      metrics.OutcomeProjection{Bypassed: 1},
+				Headroom: metrics.OutcomeProjection{Bypassed: 1},
+				Caveman:  metrics.OutcomeProjection{Executed: 1},
+				Ponytail: metrics.OutcomeProjection{Executed: 1},
+			},
+		},
+	}
+	if got := service.Metrics().RouteOutcomes(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Antigravity route outcomes = %#v, want %#v", got, want)
+	}
+}
+
+func TestPipelineExecutesRTKAndHeadroomForAntigravityFunctionResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var wire struct {
+			Messages []any `json:"messages"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&wire); err != nil {
+			t.Fatal(err)
+		}
+		changed := false
+		for _, rawMessage := range wire.Messages {
+			message, ok := rawMessage.(map[string]any)
+			if !ok || message["role"] != "tool" {
+				continue
+			}
+			message["content"] = "headroom compact result"
+			changed = true
+		}
+		if !changed {
+			t.Fatalf("Headroom did not receive an Antigravity function response: %#v", wire.Messages)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(writer).Encode(map[string]any{"messages": wire.Messages, "tokens_saved": 1}); err != nil {
+			t.Fatal(err)
+		}
+	}))
+	defer server.Close()
+
+	service := NewService(Options{
+		HeadroomFactory: func(config.Config) (HeadroomRunner, func(), error) {
+			client, err := headroom.NewClient(server.URL, time.Second)
+			if err != nil {
+				return nil, nil, err
+			}
+			adapter := headroom.NewAdapter(client)
+			return &headroomRunnerFunc{apply: func(ctx context.Context, body []byte, request Request) ([]byte, headroom.Outcome) {
+				return adapter.Apply(ctx, body, request.pair(), request.Model)
+			}}, client.CloseIdleConnections, nil
+		},
+	})
+	defer service.Close()
+	if err := service.Reconfigure(config.Config{RTKEnabled: true, HeadroomEnabled: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := []byte(`{"project":"project-1","request":{"contents":[{"role":"model","parts":[{"functionCall":{"id":"call_1","name":"run","args":{"path":"C:/repo"}}}]},{"role":"user","parts":[{"functionResponse":{"id":"call_1","name":"run","response":{"result":"` + strings.Repeat(`error: repeated tool failure\n`, 160) + `"}}}]}]},"model":"gemini-3.8-flash-high"}`)
+	output := service.Normalize(context.Background(), Request{
+		FromFormat: "openai-response", ToFormat: "antigravity", Model: "gemini-3.8-flash-high", Body: body,
+	})
+	if !bytes.Contains(output, []byte(`"result":"headroom compact result"`)) {
+		t.Fatalf("pipeline did not apply Headroom result: %s", output)
+	}
+
+	want := []metrics.RouteOutcomeSnapshot{
+		{
+			FromFormat: "openai-response",
+			ToFormat:   "antigravity",
+			Stages: metrics.RouteStageProjection{
+				Pipeline: metrics.OutcomeProjection{Executed: 1},
+				RTK:      metrics.OutcomeProjection{Executed: 1},
+				Headroom: metrics.OutcomeProjection{Executed: 1},
+				Caveman:  metrics.OutcomeProjection{Bypassed: 1},
+				Ponytail: metrics.OutcomeProjection{Bypassed: 1},
+			},
+		},
+	}
+	if got := service.Metrics().RouteOutcomes(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Antigravity route outcomes = %#v, want %#v", got, want)
 	}
 }
 

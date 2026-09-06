@@ -50,6 +50,10 @@ func (adapter *Adapter) Apply(ctx context.Context, body []byte, pair protocol.Pa
 		view, err = projectResponses(body)
 	case "claude":
 		view, err = projectClaude(body)
+	case "gemini":
+		view, err = projectGemini(body)
+	case "antigravity":
+		view, err = projectAntigravity(body)
 	default:
 		return body, OutcomeUnsupportedFormat
 	}
@@ -316,6 +320,180 @@ func responsesOutputType(value any) bool {
 	default:
 		return false
 	}
+}
+
+func projectGemini(body []byte) (*projection, error) {
+	root, errRoot := decodeObject(body)
+	if errRoot != nil {
+		return nil, errRoot
+	}
+	return projectGeminiEnvelope(body, root, "")
+}
+
+func projectAntigravity(body []byte) (*projection, error) {
+	root, errRoot := decodeObject(body)
+	if errRoot != nil {
+		return nil, errRoot
+	}
+	request, okRequest := root["request"].(map[string]any)
+	if !okRequest {
+		return nil, fmt.Errorf("missing Antigravity request")
+	}
+	return projectGeminiEnvelope(body, request, "request.")
+}
+
+func projectGeminiEnvelope(body []byte, request map[string]any, prefix string) (*projection, error) {
+	view := &projection{}
+	if errSystem := view.projectGeminiSystem(request); errSystem != nil {
+		return nil, errSystem
+	}
+	contents, okContents := request["contents"].([]any)
+	if !okContents || len(contents) == 0 {
+		return nil, fmt.Errorf("missing Antigravity contents")
+	}
+	for contentIndex, rawContent := range contents {
+		content, okContent := rawContent.(map[string]any)
+		if !okContent {
+			return nil, fmt.Errorf("Antigravity content is not an object")
+		}
+		role, okRole := content["role"].(string)
+		if !okRole || (role != "user" && role != "model") {
+			return nil, fmt.Errorf("unsupported Antigravity role")
+		}
+		parts, okParts := content["parts"].([]any)
+		if !okParts {
+			return nil, fmt.Errorf("Antigravity content is missing parts")
+		}
+		projectedRole := role
+		if projectedRole == "model" {
+			projectedRole = "assistant"
+		}
+		for partIndex, rawPart := range parts {
+			part, okPart := rawPart.(map[string]any)
+			if !okPart {
+				return nil, fmt.Errorf("Antigravity part is not an object")
+			}
+			if rawText, hasText := part["text"]; hasText {
+				text, okText := rawText.(string)
+				if !okText {
+					return nil, fmt.Errorf("Antigravity text is not a string")
+				}
+				if thought, errThought := geminiThought(part); errThought != nil {
+					return nil, errThought
+				} else if !thought {
+					messageIndex := len(view.messages)
+					view.messages = append(view.messages, map[string]any{"role": projectedRole, "content": text})
+					path := fmt.Sprintf("%scontents.%d.parts.%d.text", prefix, contentIndex, partIndex)
+					if errTarget := view.addTarget(body, path, messageIndex, -1, text); errTarget != nil {
+						return nil, errTarget
+					}
+				}
+				continue
+			}
+			if rawCall, hasCall := part["functionCall"]; hasCall {
+				if role != "model" {
+					return nil, fmt.Errorf("Antigravity function call has wrong role")
+				}
+				call, okCall := rawCall.(map[string]any)
+				if !okCall {
+					return nil, fmt.Errorf("Antigravity function call is not an object")
+				}
+				name, okName := call["name"].(string)
+				arguments, hasArguments := call["args"]
+				if !okName || name == "" || !hasArguments {
+					return nil, fmt.Errorf("invalid Antigravity function call")
+				}
+				callID := geminiCallID(call, name)
+				encodedArguments, errArguments := json.Marshal(arguments)
+				if errArguments != nil {
+					return nil, fmt.Errorf("marshal Antigravity function arguments: %w", errArguments)
+				}
+				view.messages = append(view.messages, map[string]any{
+					"role":    "assistant",
+					"content": "",
+					"tool_calls": []any{map[string]any{
+						"id":   callID,
+						"type": "function",
+						"function": map[string]any{
+							"name":      name,
+							"arguments": string(encodedArguments),
+						},
+					}},
+				})
+				continue
+			}
+			if rawResponse, hasResponse := part["functionResponse"]; hasResponse {
+				if role != "user" {
+					return nil, fmt.Errorf("Antigravity function response has wrong role")
+				}
+				response, okResponse := rawResponse.(map[string]any)
+				if !okResponse {
+					return nil, fmt.Errorf("Antigravity function response is not an object")
+				}
+				name, _ := response["name"].(string)
+				callID := geminiCallID(response, name)
+				payload, okPayload := response["response"].(map[string]any)
+				result, okResult := payload["result"].(string)
+				if callID == "" || !okPayload || !okResult {
+					return nil, fmt.Errorf("invalid Antigravity function response")
+				}
+				messageIndex := len(view.messages)
+				view.messages = append(view.messages, map[string]any{"role": "tool", "tool_call_id": callID, "content": result})
+				path := fmt.Sprintf("%scontents.%d.parts.%d.functionResponse.response.result", prefix, contentIndex, partIndex)
+				if errTarget := view.addTarget(body, path, messageIndex, -1, result); errTarget != nil {
+					return nil, errTarget
+				}
+			}
+		}
+	}
+	return view, nil
+}
+
+func (view *projection) projectGeminiSystem(request map[string]any) error {
+	rawSystem, exists := request["systemInstruction"]
+	if !exists {
+		rawSystem, exists = request["system_instruction"]
+	}
+	if !exists {
+		return nil
+	}
+	system, okSystem := rawSystem.(map[string]any)
+	if !okSystem {
+		return fmt.Errorf("Antigravity system instruction is not an object")
+	}
+	parts, okParts := system["parts"].([]any)
+	if !okParts {
+		return fmt.Errorf("Antigravity system instruction is missing parts")
+	}
+	for _, rawPart := range parts {
+		part, okPart := rawPart.(map[string]any)
+		if !okPart {
+			return fmt.Errorf("Antigravity system part is not an object")
+		}
+		if text, okText := part["text"].(string); okText {
+			view.messages = append(view.messages, map[string]any{"role": "system", "content": text})
+		}
+	}
+	return nil
+}
+
+func geminiThought(part map[string]any) (bool, error) {
+	rawThought, exists := part["thought"]
+	if !exists {
+		return false, nil
+	}
+	thought, okThought := rawThought.(bool)
+	if !okThought {
+		return false, fmt.Errorf("Antigravity thought is not a boolean")
+	}
+	return thought, nil
+}
+
+func geminiCallID(value map[string]any, fallback string) string {
+	if id, ok := value["id"].(string); ok && id != "" {
+		return id
+	}
+	return fallback
 }
 
 func projectClaude(body []byte) (*projection, error) {

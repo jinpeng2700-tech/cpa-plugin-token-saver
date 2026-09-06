@@ -222,7 +222,19 @@ func (handler *Handler) dashboard() DashboardDTO {
 			Caveman:  projectStage(metricSnapshot.Stages.Caveman),
 			Ponytail: projectStage(metricSnapshot.Stages.Ponytail),
 		},
+		RouteOutcomes: handler.routeOutcomes(),
 	}
+}
+
+func (handler *Handler) routeOutcomes() []metrics.RouteOutcomeSnapshot {
+	if handler.saver == nil {
+		return nil
+	}
+	registry := handler.saver.Metrics()
+	if registry == nil {
+		return nil
+	}
+	return registry.RouteOutcomes()
 }
 
 func projectStage(snap metrics.StageSnapshot) DashboardStageDTO {

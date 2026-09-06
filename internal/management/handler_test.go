@@ -464,6 +464,10 @@ func TestDashboardReturnsPassiveStageMetricsAndHeadroomStatus(t *testing.T) {
 	})
 	defer service.Close()
 	service.Metrics().Record(metrics.StageRTK, metrics.OutcomeExecuted, 100, 60, 5*time.Millisecond)
+	service.Metrics().RecordRoute(metrics.StageRTK, metrics.OutcomeBypassed, "openai-response", "antigravity")
+	service.Metrics().RecordRoute(metrics.StageHeadroom, metrics.OutcomeBypassed, "openai-response", "antigravity")
+	service.Metrics().RecordRoute(metrics.StageCaveman, metrics.OutcomeExecuted, "openai-response", "antigravity")
+	service.Metrics().RecordRoute(metrics.StagePonytail, metrics.OutcomeExecuted, "openai-response", "antigravity")
 
 	store, errStore := config.NewStore([]byte("headroom_enabled: true\nheadroom_url: http://127.0.0.1:8787\n"))
 	if errStore != nil {
@@ -504,6 +508,30 @@ func TestDashboardReturnsPassiveStageMetricsAndHeadroomStatus(t *testing.T) {
 	}
 	if dashboard.Stages.RTK.Executed != 1 || dashboard.Stages.RTK.InputBytes != 100 || dashboard.Stages.RTK.OutputBytes != 60 {
 		t.Fatalf("RTK stage counters = %#v", dashboard.Stages.RTK)
+	}
+	wantRoutes := []metrics.RouteOutcomeSnapshot{
+		{
+			FromFormat: "openai-response",
+			ToFormat:   "antigravity",
+			Stages: metrics.RouteStageProjection{
+				RTK:      metrics.OutcomeProjection{Bypassed: 1},
+				Headroom: metrics.OutcomeProjection{Bypassed: 1},
+				Caveman:  metrics.OutcomeProjection{Executed: 1},
+				Ponytail: metrics.OutcomeProjection{Executed: 1},
+			},
+		},
+	}
+	if !reflect.DeepEqual(dashboard.RouteOutcomes, wantRoutes) {
+		t.Fatalf("dashboard route outcomes = %#v, want %#v", dashboard.RouteOutcomes, wantRoutes)
+	}
+	routeJSON, errJSON := json.Marshal(dashboard.RouteOutcomes)
+	if errJSON != nil {
+		t.Fatal(errJSON)
+	}
+	for _, forbidden := range []string{"input_bytes", "output_bytes", "duration_ns"} {
+		if strings.Contains(string(routeJSON), forbidden) {
+			t.Fatalf("route outcomes retained %q: %s", forbidden, routeJSON)
+		}
 	}
 	if !dashboard.Headroom.Enabled || dashboard.Headroom.URL != "http://127.0.0.1:8787" || dashboard.Headroom.Status != HeadroomStatusUnknown || dashboard.Headroom.Circuit != HeadroomCircuitClosed {
 		t.Fatalf("headroom initial dashboard = %#v", dashboard.Headroom)

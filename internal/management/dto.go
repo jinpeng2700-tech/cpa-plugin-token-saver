@@ -158,9 +158,10 @@ type DashboardHeadroomDTO struct {
 }
 
 type DashboardDTO struct {
-	StartedAt time.Time            `json:"started_at"`
-	Headroom  DashboardHeadroomDTO `json:"headroom"`
-	Stages    DashboardStagesDTO   `json:"stages"`
+	StartedAt     time.Time                      `json:"started_at"`
+	Headroom      DashboardHeadroomDTO           `json:"headroom"`
+	Stages        DashboardStagesDTO             `json:"stages"`
+	RouteOutcomes []metrics.RouteOutcomeSnapshot `json:"route_outcomes"`
 }
 
 type HeadroomCheckDTO struct {
