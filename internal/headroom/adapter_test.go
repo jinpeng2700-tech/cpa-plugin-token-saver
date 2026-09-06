@@ -150,6 +150,73 @@ func TestAdapterResponsesToolOutputsPreserveOpaqueItems(t *testing.T) {
 	}
 }
 
+func TestAdapterAntigravityCompressesMutableTextAndPreservesEnvelope(t *testing.T) {
+	body := []byte(`{"project":"project-1","request":{"systemInstruction":{"parts":[{"text":"keep system"}]},"contents":[{"role":"model","parts":[{"functionCall":{"id":"call_1","name":"run","args":{"line":9007199254740993}}},{"thought":true,"thoughtSignature":"opaque-signature","text":"keep thought"}]},{"role":"user","parts":[{"functionResponse":{"id":"call_1","name":"run","response":{"result":"very long tool result","opaque":"keep"}}}]},{"role":"model","parts":[{"text":"very long model history"}]},{"role":"user","parts":[{"text":"very long user context"}]}],"tools":[{"functionDeclarations":[{"name":"run"}]}]},"model":"gemini-3.8-flash-high"}`)
+	adapter, closeServer := adapterWithHandler(t, func(writer http.ResponseWriter, request *http.Request) {
+		messages := readWireMessages(t, request)
+		if len(messages) != 5 {
+			t.Fatalf("projected message count = %d, want 5: %#v", len(messages), messages)
+		}
+		if content := messages[0].(map[string]any)["content"]; content != "keep system" {
+			t.Fatalf("system content = %#v", content)
+		}
+		call := messages[1].(map[string]any)
+		if call["role"] != "assistant" || call["content"] != "" {
+			t.Fatalf("projected function call = %#v", call)
+		}
+		setMessageStringContent(t, messages[2], "short tool result")
+		setMessageStringContent(t, messages[3], "brief model context")
+		setMessageStringContent(t, messages[4], "brief user context")
+		writeMessages(t, writer, messages)
+	})
+	defer closeServer()
+
+	output, outcome := adapter.Apply(context.Background(), body, protocol.Pair{From: "openai-response", To: "antigravity"}, "gemini-3.8-flash-high")
+	if outcome != OutcomeApplied {
+		t.Fatalf("outcome = %q", outcome)
+	}
+	for _, required := range []string{
+		`"result":"short tool result"`,
+		`"text":"brief model context"`,
+		`"text":"brief user context"`,
+		`"project":"project-1"`,
+		`"thoughtSignature":"opaque-signature"`,
+		`"text":"keep thought"`,
+		`9007199254740993`,
+		`"opaque":"keep"`,
+		`"functionDeclarations":[{"name":"run"}]`,
+	} {
+		if !strings.Contains(string(output), required) {
+			t.Fatalf("Antigravity rewrite lost %q: %s", required, output)
+		}
+	}
+}
+
+func TestAdapterGeminiCompressesFunctionResponseResult(t *testing.T) {
+	body := []byte(`{"contents":[{"role":"user","parts":[{"functionResponse":{"name":"run","response":{"result":"very long tool result","opaque":"keep"}}}]}],"model":"gemini-3.8-flash-high"}`)
+	adapter, closeServer := adapterWithHandler(t, func(writer http.ResponseWriter, request *http.Request) {
+		messages := readWireMessages(t, request)
+		if len(messages) != 1 {
+			t.Fatalf("projected message count = %d, want 1: %#v", len(messages), messages)
+		}
+		message := messages[0].(map[string]any)
+		if message["role"] != "tool" || message["tool_call_id"] != "run" || message["content"] != "very long tool result" {
+			t.Fatalf("projected function response = %#v", message)
+		}
+		setMessageStringContent(t, messages[0], "short tool result")
+		writeMessages(t, writer, messages)
+	})
+	defer closeServer()
+
+	output, outcome := adapter.Apply(context.Background(), body, protocol.Pair{From: "openai", To: "gemini"}, "gemini-3.8-flash-high")
+	if outcome != OutcomeApplied {
+		t.Fatalf("outcome = %q", outcome)
+	}
+	if !strings.Contains(string(output), `"result":"short tool result"`) || !strings.Contains(string(output), `"opaque":"keep"`) {
+		t.Fatalf("Gemini rewrite = %s", output)
+	}
+}
+
 func TestAdapterClaudeSuccessPreservesSystemToolsAndBlockOrder(t *testing.T) {
 	t.Parallel()
 
@@ -207,7 +274,7 @@ func TestAdapterBypassesUnsupportedPayloadsByteIdenticallyWithoutNetwork(t *test
 		body []byte
 		want Outcome
 	}{
-		{name: "gemini", pair: protocol.Pair{From: "openai", To: "gemini"}, body: []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`), want: OutcomeUnsupportedFormat},
+		{name: "gemini image only", pair: protocol.Pair{From: "openai", To: "gemini"}, body: []byte(`{"contents":[{"role":"user","parts":[{"inlineData":{"mimeType":"image/png","data":"AQID"}}]}]}`), want: OutcomeUnsupportedStructure},
 		{name: "unknown pair", pair: protocol.Pair{From: "plugin", To: "openai"}, body: []byte(`{"messages":[{"role":"user","content":"hello"}]}`), want: OutcomeUnsupportedFormat},
 		{name: "responses tool missing call id", pair: protocol.Pair{From: "openai", To: "codex"}, body: []byte(`{"input":[{"type":"function_call_output","output":"x"}]}`), want: OutcomeUnsupportedStructure},
 		{name: "responses reasoning", pair: protocol.Pair{From: "openai", To: "codex"}, body: []byte(`{"input":[{"type":"reasoning","summary":[]}]}`), want: OutcomeUnsupportedStructure},

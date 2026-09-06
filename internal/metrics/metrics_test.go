@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -67,6 +68,40 @@ func TestRegistryRecordsAllBypassedUnderOneProjection(t *testing.T) {
 		if stage.Bypassed != 1 || stage.InputBytes != 42 || stage.OutputBytes != 42 {
 			t.Fatalf("%s safe-off snapshot = %#v", name, stage)
 		}
+	}
+}
+
+func TestRegistryProjectsRouteOutcomesWithBoundedFormats(t *testing.T) {
+	registry := New(time.Unix(400, 0))
+	registry.RecordRoute(StagePipeline, OutcomeExecuted, "openai-response", "antigravity")
+	registry.RecordRoute(StageRTK, OutcomeBypassed, "openai-response", "antigravity")
+	registry.RecordRoute(StageHeadroom, OutcomeBypassed, "openai-response", "antigravity")
+	registry.RecordRoute(StageCaveman, OutcomeExecuted, "openai-response", "antigravity")
+	registry.RecordRoute(StagePonytail, OutcomeExecuted, "openai-response", "antigravity")
+	registry.RecordRoute(StageRTK, OutcomeBypassed, "private-source-format", "private-target-format")
+
+	want := []RouteOutcomeSnapshot{
+		{
+			FromFormat: "openai-response",
+			ToFormat:   "antigravity",
+			Stages: RouteStageProjection{
+				Pipeline: OutcomeProjection{Executed: 1},
+				RTK:      OutcomeProjection{Bypassed: 1},
+				Headroom: OutcomeProjection{Bypassed: 1},
+				Caveman:  OutcomeProjection{Executed: 1},
+				Ponytail: OutcomeProjection{Executed: 1},
+			},
+		},
+		{
+			FromFormat: "other",
+			ToFormat:   "other",
+			Stages: RouteStageProjection{
+				RTK: OutcomeProjection{Bypassed: 1},
+			},
+		},
+	}
+	if got := registry.RouteOutcomes(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("route outcomes = %#v, want %#v", got, want)
 	}
 }
 

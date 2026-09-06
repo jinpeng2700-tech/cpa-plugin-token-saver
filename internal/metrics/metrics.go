@@ -2,6 +2,7 @@
 package metrics
 
 import (
+	"sort"
 	"sync"
 	"time"
 )
@@ -51,6 +52,33 @@ type StageProjection struct {
 	Ponytail StageSnapshot `json:"ponytail"`
 }
 
+// OutcomeProjection contains only stage outcomes. It deliberately excludes
+// request size, duration, model, payload, credential, and error data.
+type OutcomeProjection struct {
+	Executed  uint64 `json:"executed"`
+	Bypassed  uint64 `json:"bypassed"`
+	FailOpen  uint64 `json:"fail_open"`
+	Timeout   uint64 `json:"timeout"`
+	Saturated uint64 `json:"saturated"`
+}
+
+// RouteStageProjection fixes the complete route-stage label set at compile time.
+type RouteStageProjection struct {
+	Pipeline OutcomeProjection `json:"pipeline"`
+	RTK      OutcomeProjection `json:"rtk"`
+	Headroom OutcomeProjection `json:"headroom"`
+	Caveman  OutcomeProjection `json:"caveman"`
+	Ponytail OutcomeProjection `json:"ponytail"`
+}
+
+// RouteOutcomeSnapshot is a bounded route projection suitable for the
+// management dashboard. Formats outside the fixed allowlist become "other".
+type RouteOutcomeSnapshot struct {
+	FromFormat string               `json:"from_format"`
+	ToFormat   string               `json:"to_format"`
+	Stages     RouteStageProjection `json:"stages"`
+}
+
 // GenerationSnapshot exposes only current/previous generation counts.
 type GenerationSnapshot struct {
 	Generation uint64 `json:"generation"`
@@ -70,9 +98,15 @@ type Registry struct {
 	mu        sync.Mutex
 	startedAt time.Time
 	stages    StageProjection
+	routes    map[routeKey]RouteStageProjection
 	current   uint64
 	previous  uint64
 	inflight  map[uint64]uint64
+}
+
+type routeKey struct {
+	from string
+	to   string
 }
 
 // New creates a process-local empty registry.
@@ -80,7 +114,11 @@ func New(startedAt time.Time) *Registry {
 	if startedAt.IsZero() {
 		startedAt = time.Now()
 	}
-	return &Registry{startedAt: startedAt, inflight: make(map[uint64]uint64)}
+	return &Registry{
+		startedAt: startedAt,
+		routes:    make(map[routeKey]RouteStageProjection),
+		inflight:  make(map[uint64]uint64),
+	}
 }
 
 // Record updates a bounded stage aggregate.
@@ -142,6 +180,47 @@ func (registry *Registry) RecordAllBypassed(size int) {
 	}
 }
 
+// RecordRoute records one stage outcome for a request route without retaining
+// the request or any variable request metadata.
+func (registry *Registry) RecordRoute(stage Stage, outcome Outcome, fromFormat, toFormat string) {
+	if registry == nil {
+		return
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	key := normalizedRouteKey(fromFormat, toFormat)
+	projection := registry.routes[key]
+	counter, validStage := routeStage(&projection, stage)
+	if !validStage || !validOutcome(outcome) {
+		counter = &projection.Pipeline
+		outcome = OutcomeFailOpen
+	}
+	recordRouteOutcome(counter, outcome)
+	registry.routes[key] = projection
+}
+
+// RecordAllBypassedRoute records the safe-off result for every pipeline stage
+// under one bounded route aggregate.
+func (registry *Registry) RecordAllBypassedRoute(fromFormat, toFormat string) {
+	if registry == nil {
+		return
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	key := normalizedRouteKey(fromFormat, toFormat)
+	projection := registry.routes[key]
+	for _, counter := range []*OutcomeProjection{
+		&projection.RTK,
+		&projection.Headroom,
+		&projection.Caveman,
+		&projection.Ponytail,
+		&projection.Pipeline,
+	} {
+		counter.Bypassed++
+	}
+	registry.routes[key] = projection
+}
+
 // PublishGeneration makes one successfully configured generation current.
 func (registry *Registry) PublishGeneration(generation uint64) {
 	if registry == nil {
@@ -197,6 +276,31 @@ func (registry *Registry) Snapshot() Snapshot {
 	}
 }
 
+// RouteOutcomes returns a stable, request-free copy of the bounded route
+// outcome aggregates.
+func (registry *Registry) RouteOutcomes() []RouteOutcomeSnapshot {
+	if registry == nil {
+		return nil
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	outcomes := make([]RouteOutcomeSnapshot, 0, len(registry.routes))
+	for key, stages := range registry.routes {
+		outcomes = append(outcomes, RouteOutcomeSnapshot{
+			FromFormat: key.from,
+			ToFormat:   key.to,
+			Stages:     stages,
+		})
+	}
+	sort.Slice(outcomes, func(left, right int) bool {
+		if outcomes[left].FromFormat == outcomes[right].FromFormat {
+			return outcomes[left].ToFormat < outcomes[right].ToFormat
+		}
+		return outcomes[left].FromFormat < outcomes[right].FromFormat
+	})
+	return outcomes
+}
+
 func (registry *Registry) stageLocked(stage Stage) (*StageSnapshot, bool) {
 	switch stage {
 	case StagePipeline:
@@ -211,6 +315,53 @@ func (registry *Registry) stageLocked(stage Stage) (*StageSnapshot, bool) {
 		return &registry.stages.Ponytail, true
 	default:
 		return nil, false
+	}
+}
+
+func routeStage(projection *RouteStageProjection, stage Stage) (*OutcomeProjection, bool) {
+	switch stage {
+	case StagePipeline:
+		return &projection.Pipeline, true
+	case StageRTK:
+		return &projection.RTK, true
+	case StageHeadroom:
+		return &projection.Headroom, true
+	case StageCaveman:
+		return &projection.Caveman, true
+	case StagePonytail:
+		return &projection.Ponytail, true
+	default:
+		return nil, false
+	}
+}
+
+func recordRouteOutcome(counter *OutcomeProjection, outcome Outcome) {
+	switch outcome {
+	case OutcomeExecuted:
+		counter.Executed++
+	case OutcomeBypassed:
+		counter.Bypassed++
+	case OutcomeTimeout:
+		counter.FailOpen++
+		counter.Timeout++
+	case OutcomeSaturated:
+		counter.FailOpen++
+		counter.Saturated++
+	default:
+		counter.FailOpen++
+	}
+}
+
+func normalizedRouteKey(fromFormat, toFormat string) routeKey {
+	return routeKey{from: knownFormat(fromFormat), to: knownFormat(toFormat)}
+}
+
+func knownFormat(format string) string {
+	switch format {
+	case "openai", "openai-response", "codex", "claude", "gemini", "interactions", "antigravity":
+		return format
+	default:
+		return "other"
 	}
 }
 

@@ -139,6 +139,16 @@
         .metric-title { font-size: 13px; font-weight: 600; color: #fff; margin-bottom: 8px; }
         .metric-num { font-size: 18px; font-weight: 600; color: var(--accent); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
         .metric-sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+        .route-list { display: grid; gap: 8px; margin-top: 12px; }
+        .route-row {
+            background: var(--card-sub-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 12px;
+        }
+        .route-key { font-size: 13px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #fff; }
+        .route-stages { font-size: 12px; color: var(--text-muted); line-height: 1.7; margin-top: 5px; }
+        .route-empty { color: var(--text-muted); font-size: 13px; padding: 4px 0; }
         .footer-note {
             font-size: 12px;
             color: var(--text-muted);
@@ -229,6 +239,16 @@
             </div>
             <div class="footer-note">提示：指标计数在 CLIProxyAPI 进程重启后清零。</div>
         </div>
+
+        <div class="card">
+            <div class="card-title">
+                <span>路由阶段结果</span>
+            </div>
+            <div id="routeOutcomes" class="route-list">
+                <div class="route-empty">暂无请求路由数据。</div>
+            </div>
+            <div class="footer-note">仅聚合协议格式与阶段结果；不记录模型名、请求内容或凭证。</div>
+        </div>
     </div>
 
     <script>
@@ -244,6 +264,59 @@
             const units = ['B', 'KB', 'MB', 'GB', 'TB'];
             const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
             return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+        }
+
+        function outcomeSummary(stage) {
+            if (!stage) return '';
+            const labels = [
+                ['执行', 'executed'],
+                ['旁路', 'bypassed'],
+                ['失败降级', 'fail_open'],
+                ['超时', 'timeout'],
+                ['饱和', 'saturated']
+            ];
+            const parts = [];
+            labels.forEach(function(item) {
+                const count = stage[item[1]] || 0;
+                if (count > 0) parts.push(item[0] + ' ' + count.toLocaleString());
+            });
+            return parts.join('，');
+        }
+
+        function renderRouteOutcomes(routes) {
+            const container = document.getElementById('routeOutcomes');
+            if (!container) return;
+            container.replaceChildren();
+            if (!Array.isArray(routes) || routes.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'route-empty';
+                empty.innerText = '暂无请求路由数据。';
+                container.appendChild(empty);
+                return;
+            }
+            routes.forEach(function(route) {
+                const row = document.createElement('div');
+                row.className = 'route-row';
+                const key = document.createElement('div');
+                key.className = 'route-key';
+                key.innerText = (route.from_format || 'other') + ' → ' + (route.to_format || 'other');
+                const stageText = document.createElement('div');
+                stageText.className = 'route-stages';
+                const stages = route.stages || {};
+                const labels = [
+                    ['RTK', stages.rtk],
+                    ['Headroom', stages.headroom],
+                    ['Caveman', stages.caveman],
+                    ['Ponytail', stages.ponytail],
+                    ['流水线', stages.pipeline]
+                ];
+                stageText.innerText = labels.map(function(item) {
+                    return item[0] + '：' + (outcomeSummary(item[1]) || '无结果');
+                }).join('；');
+                row.appendChild(key);
+                row.appendChild(stageText);
+                container.appendChild(row);
+            });
         }
 
         const handshakeTimer = setTimeout(function() {
@@ -384,6 +457,7 @@
             renderStage('headroom', stages.headroom);
             renderStage('caveman', stages.caveman);
             renderStage('ponytail', stages.ponytail);
+            renderRouteOutcomes(data.route_outcomes);
         }
 
         async function performCheck() {

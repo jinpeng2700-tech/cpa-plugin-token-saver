@@ -89,6 +89,28 @@ func TestViewFindsCodexCustomToolOutputTextSlots(t *testing.T) {
 	}
 }
 
+func TestViewFindsAntigravityFunctionResponseTextSlots(t *testing.T) {
+	body := []byte(`{"project":"project-1","request":{"contents":[{"role":"model","parts":[{"functionCall":{"id":"call_1","name":"run","args":{"path":"C:/repo"}}},{"thought":true,"thoughtSignature":"opaque-signature","text":"keep thought"}]},{"role":"user","parts":[{"functionResponse":{"id":"call_1","name":"run","response":{"result":"very long tool result","opaque":9007199254740993}},"opaque":{"keep":true}}]}],"tools":[{"functionDeclarations":[{"name":"run"}]}]},"model":"gemini-3.8-flash-high"}`)
+	view, ok := View(body, Pair{From: "openai-response", To: "antigravity"})
+	if !ok {
+		t.Fatal("View() did not recognize Antigravity function response payload")
+	}
+	slots := view.Slots()
+	if len(slots) != 1 || slots[0].ResultID != "call_1" || slots[0].Text != "very long tool result" {
+		t.Fatalf("slots = %#v", slots)
+	}
+
+	got := view.Rewrite(map[int]string{0: "short result"})
+	if !bytes.Contains(got, []byte(`"result":"short result"`)) || bytes.Contains(got, []byte(`"result":"very long tool result"`)) {
+		t.Fatalf("Rewrite() did not update Antigravity function result: %s", got)
+	}
+	for _, opaque := range []string{`"project":"project-1"`, `"thoughtSignature":"opaque-signature"`, `9007199254740993`, `"keep":true`} {
+		if !bytes.Contains(got, []byte(opaque)) {
+			t.Fatalf("Rewrite() changed opaque Antigravity field %q: %s", opaque, got)
+		}
+	}
+}
+
 func TestViewMarksErrorsAndPreservesBypassBytes(t *testing.T) {
 	body := []byte("  {\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"e1\",\"is_error\":true,\"content\":\"failure\"}]}]}  \n")
 	view, ok := View(body, Pair{From: "openai", To: "claude"})

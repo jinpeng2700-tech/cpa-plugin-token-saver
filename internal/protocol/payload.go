@@ -97,6 +97,8 @@ func View(body []byte, pair Pair) (Payload, bool) {
 		recognized = view.claudeMessages()
 	case "gemini":
 		recognized = view.gemini()
+	case "antigravity":
+		recognized = view.antigravity()
 	}
 	if !recognized {
 		return Payload{}, false
@@ -277,12 +279,20 @@ func (p *Payload) claudeMessages() bool {
 }
 
 func (p *Payload) gemini() bool {
-	contents := gjson.GetBytes(p.raw, "contents")
+	return p.geminiAt("contents")
+}
+
+func (p *Payload) antigravity() bool {
+	return p.geminiAt("request.contents")
+}
+
+func (p *Payload) geminiAt(contentsPath string) bool {
+	contents := gjson.GetBytes(p.raw, contentsPath)
 	if !contents.IsArray() {
 		return false
 	}
 	for i, content := range contents.Array() {
-		partsPath := "contents." + indexString(i) + ".parts"
+		partsPath := contentsPath + "." + indexString(i) + ".parts"
 		parts := gjson.GetBytes(p.raw, partsPath)
 		if !content.IsObject() || !parts.IsArray() {
 			continue
