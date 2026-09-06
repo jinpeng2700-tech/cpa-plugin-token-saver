@@ -18,7 +18,7 @@ import (
 func TestReleaseBuildContractIsCentralizedAndPinned(t *testing.T) {
 	makefile := readRepositoryFile(t, "Makefile")
 	for _, want := range []string{
-		"override VERSION := 1.2.5",
+		"override VERSION := 1.2.6",
 		"SOURCE_COMMIT",
 		"CGO_ENABLED=1",
 		"CGO_ENABLED=0",
@@ -305,7 +305,7 @@ func TestReleaseWorkflowPinsVersionHostAndLinuxAMD64(t *testing.T) {
 	workflow := readRepositoryFile(t, ".github/workflows/release.yml")
 	for _, want := range []string{
 		`tags:`,
-		`- "v1.2.5"`,
+		`- "v1.2.6"`,
 		"v7.2.137",
 		"linux-amd64",
 	} {

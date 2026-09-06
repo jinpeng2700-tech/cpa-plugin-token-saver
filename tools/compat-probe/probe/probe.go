@@ -78,6 +78,28 @@ type probeStages struct {
 	Ponytail probeStageCounters `json:"ponytail"`
 }
 
+type probeOutcomeCounters struct {
+	Executed  uint64 `json:"executed"`
+	Bypassed  uint64 `json:"bypassed"`
+	FailOpen  uint64 `json:"fail_open"`
+	Timeout   uint64 `json:"timeout"`
+	Saturated uint64 `json:"saturated"`
+}
+
+type probeRouteStages struct {
+	Pipeline probeOutcomeCounters `json:"pipeline"`
+	RTK      probeOutcomeCounters `json:"rtk"`
+	Headroom probeOutcomeCounters `json:"headroom"`
+	Caveman  probeOutcomeCounters `json:"caveman"`
+	Ponytail probeOutcomeCounters `json:"ponytail"`
+}
+
+type probeRouteOutcome struct {
+	FromFormat string           `json:"from_format"`
+	ToFormat   string           `json:"to_format"`
+	Stages     probeRouteStages `json:"stages"`
+}
+
 type probeDashboardHeadroom struct {
 	Enabled       bool       `json:"enabled"`
 	URL           string     `json:"url"`
@@ -89,9 +111,10 @@ type probeDashboardHeadroom struct {
 }
 
 type probeDashboard struct {
-	StartedAt time.Time              `json:"started_at"`
-	Headroom  probeDashboardHeadroom `json:"headroom"`
-	Stages    probeStages            `json:"stages"`
+	StartedAt     time.Time              `json:"started_at"`
+	Headroom      probeDashboardHeadroom `json:"headroom"`
+	Stages        probeStages            `json:"stages"`
+	RouteOutcomes []probeRouteOutcome    `json:"route_outcomes"`
 }
 
 type probeHeadroomCheck struct {
@@ -110,12 +133,63 @@ func validStageCounters(s probeStageCounters) bool {
 	return s.SavedBytes == expectedSaved
 }
 
+func validRouteFormat(format string) bool {
+	switch format {
+	case "openai", "openai-response", "codex", "claude", "gemini", "interactions", "antigravity", "other":
+		return true
+	default:
+		return false
+	}
+}
+
+func validOutcomeCounters(counters probeOutcomeCounters) bool {
+	return counters.FailOpen >= counters.Timeout+counters.Saturated
+}
+
+func validRouteStages(stages probeRouteStages) bool {
+	return validOutcomeCounters(stages.Pipeline) &&
+		validOutcomeCounters(stages.RTK) &&
+		validOutcomeCounters(stages.Headroom) &&
+		validOutcomeCounters(stages.Caveman) &&
+		validOutcomeCounters(stages.Ponytail)
+}
+
+func exactRawFields(values map[string]json.RawMessage, names ...string) bool {
+	if len(values) != len(names) {
+		return false
+	}
+	for _, name := range names {
+		if values[name] == nil {
+			return false
+		}
+	}
+	return true
+}
+
+func validRouteOutcomeRaw(raw json.RawMessage) bool {
+	var route map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &route); err != nil || !exactRawFields(route, "from_format", "to_format", "stages") {
+		return false
+	}
+	var stages map[string]json.RawMessage
+	if err := json.Unmarshal(route["stages"], &stages); err != nil || !exactRawFields(stages, "pipeline", "rtk", "headroom", "caveman", "ponytail") {
+		return false
+	}
+	for _, stage := range stages {
+		var counters map[string]json.RawMessage
+		if err := json.Unmarshal(stage, &counters); err != nil || !exactRawFields(counters, "executed", "bypassed", "fail_open", "timeout", "saturated") {
+			return false
+		}
+	}
+	return true
+}
+
 func validDashboardRaw(raw []byte, expectedHeadroomURL string) (*probeDashboard, bool) {
 	var checkMap map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &checkMap); err != nil {
 		return nil, false
 	}
-	if len(checkMap) != 3 || checkMap["started_at"] == nil || checkMap["headroom"] == nil || checkMap["stages"] == nil {
+	if !exactRawFields(checkMap, "started_at", "headroom", "stages", "route_outcomes") {
 		return nil, false
 	}
 	var checkStages map[string]json.RawMessage
@@ -129,6 +203,15 @@ func validDashboardRaw(raw []byte, expectedHeadroomURL string) (*probeDashboard,
 		checkHeadroom["circuit"] == nil || checkHeadroom["last_checked_at"] == nil ||
 		checkHeadroom["last_latency_ms"] == nil || checkHeadroom["last_outcome"] == nil {
 		return nil, false
+	}
+	var checkRoutes []json.RawMessage
+	if err := json.Unmarshal(checkMap["route_outcomes"], &checkRoutes); err != nil || checkRoutes == nil {
+		return nil, false
+	}
+	for _, route := range checkRoutes {
+		if !validRouteOutcomeRaw(route) {
+			return nil, false
+		}
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -149,6 +232,11 @@ func validDashboardRaw(raw []byte, expectedHeadroomURL string) (*probeDashboard,
 		!validStageCounters(dash.Stages.Caveman) ||
 		!validStageCounters(dash.Stages.Ponytail) {
 		return nil, false
+	}
+	for _, route := range dash.RouteOutcomes {
+		if !validRouteFormat(route.FromFormat) || !validRouteFormat(route.ToFormat) || !validRouteStages(route.Stages) {
+			return nil, false
+		}
 	}
 	return &dash, true
 }

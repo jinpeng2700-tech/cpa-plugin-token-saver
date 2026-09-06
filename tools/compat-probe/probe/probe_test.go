@@ -97,19 +97,30 @@ func TestDashboardValidationRequiresExactSafeFields(t *testing.T) {
 			"headroom": {"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0},
 			"caveman": {"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0},
 			"ponytail": {"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0}
-		}
+		},
+		"route_outcomes": [{
+			"from_format": "openai-response",
+			"to_format": "antigravity",
+			"stages": {
+				"pipeline": {"executed":1,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0},
+				"rtk": {"executed":1,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0},
+				"headroom": {"executed":1,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0},
+				"caveman": {"executed":1,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0},
+				"ponytail": {"executed":1,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0}
+			}
+		}]
 	}`)
 	dash, ok := validDashboardRaw(valid, "http://127.0.0.1:8787")
-	if !ok || dash == nil {
+	if !ok || dash == nil || len(dash.RouteOutcomes) != 1 {
 		t.Fatal("valid dashboard was rejected")
 	}
 
-	unknownField := []byte(`{"started_at":"2026-08-21T00:00:00Z","extra":1,"headroom":{"enabled":true,"url":"http://127.0.0.1:8787","status":"ready","circuit":"closed","last_checked_at":null,"last_latency_ms":null,"last_outcome":"unknown"},"stages":{"rtk":{"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0},"headroom":{"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0},"caveman":{"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0},"ponytail":{"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0}}}`)
+	unknownField := []byte(`{"started_at":"2026-08-21T00:00:00Z","extra":1,"headroom":{"enabled":true,"url":"http://127.0.0.1:8787","status":"ready","circuit":"closed","last_checked_at":null,"last_latency_ms":null,"last_outcome":"unknown"},"stages":{"rtk":{"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0},"headroom":{"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0},"caveman":{"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0},"ponytail":{"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0}},"route_outcomes":[]}`)
 	if _, okUnknown := validDashboardRaw(unknownField, "http://127.0.0.1:8787"); okUnknown {
 		t.Fatal("dashboard with unknown top-level field was accepted")
 	}
 
-	missingField := []byte(`{"started_at":"2026-08-21T00:00:00Z","headroom":{"enabled":true,"url":"http://127.0.0.1:8787","status":"ready","circuit":"closed","last_checked_at":null,"last_latency_ms":null,"last_outcome":"unknown"}}`)
+	missingField := []byte(`{"started_at":"2026-08-21T00:00:00Z","headroom":{"enabled":true,"url":"http://127.0.0.1:8787","status":"ready","circuit":"closed","last_checked_at":null,"last_latency_ms":null,"last_outcome":"unknown"},"route_outcomes":[]}`)
 	if _, okMissing := validDashboardRaw(missingField, "http://127.0.0.1:8787"); okMissing {
 		t.Fatal("dashboard missing stages was accepted")
 	}
@@ -122,10 +133,21 @@ func TestDashboardValidationRequiresExactSafeFields(t *testing.T) {
 			"headroom": {"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0},
 			"caveman": {"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0},
 			"ponytail": {"executed":0,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"input_bytes":0,"output_bytes":0,"saved_bytes":0,"duration_ns":0}
-		}
+		},
+		"route_outcomes": []
 	}`)
 	if _, okSaved := validDashboardRaw(savedMismatch, "http://127.0.0.1:8787"); okSaved {
 		t.Fatal("dashboard with saved_bytes mismatch was accepted")
+	}
+
+	unsafeFormat := bytes.Replace(valid, []byte(`"to_format": "antigravity"`), []byte(`"to_format": "unsafe-format"`), 1)
+	if _, okUnsafe := validDashboardRaw(unsafeFormat, "http://127.0.0.1:8787"); okUnsafe {
+		t.Fatal("dashboard with unsafe route format was accepted")
+	}
+
+	unsafeCounter := bytes.Replace(valid, []byte(`"executed":1,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0`), []byte(`"executed":1,"bypassed":0,"fail_open":0,"timeout":0,"saturated":0,"extra":"leak"`), 1)
+	if _, okUnsafe := validDashboardRaw(unsafeCounter, "http://127.0.0.1:8787"); okUnsafe {
+		t.Fatal("dashboard with unsafe route counter field was accepted")
 	}
 }
 
