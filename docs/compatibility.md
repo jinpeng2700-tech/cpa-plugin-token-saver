@@ -4,27 +4,28 @@
 
 ## Token Saver release contract
 
-Stable plugin release `v1.2.6` is built from the tagged commit archive, never from the working tree. The pinned release container combines Go `1.26.5` with Debian Bullseye glibc `2.31`; release validation rejects a plugin whose highest required GLIBC symbol exceeds `2.32` and rejects either helper when its ELF dynamic section contains `NEEDED`.
+Stable plugin release `v1.2.7` is built from the tagged commit archive, never from the working tree. The pinned release container combines Go `1.26.5` with Debian Bullseye glibc `2.31`; release validation rejects a plugin whose highest required GLIBC symbol exceeds `2.32` and rejects either helper when its ELF dynamic section contains `NEEDED`.
 
 The immutable Linux amd64 release contains exactly:
 
-- `token-saver-v1.2.6-linux-amd64.so`
-- `compat-probe-v1.2.6-linux-amd64`
-- `update-verifier-v1.2.6-linux-amd64`
+- `token-saver-v1.2.7-linux-amd64.so`
+- `compat-probe-v1.2.7-linux-amd64`
+- `update-verifier-v1.2.7-linux-amd64`
 - `GLIBC_REQUIREMENTS.txt`
 - `release-metadata.json`
 - `SHA256SUMS`
 
-`release-metadata.json` binds version `1.2.6`, tag `v1.2.6`, full source commit, platform `linux-amd64`, ABI `1`, RPC `3`, and observed maximum GLIBC requirement. `SHA256SUMS` covers every release file except itself. The release workflow grants write permission only to the final job after the read-only compatibility job passes.
+`release-metadata.json` binds version `1.2.7`, tag `v1.2.7`, full source commit, platform `linux-amd64`, ABI `1`, RPC `3`, and observed maximum GLIBC requirement. `SHA256SUMS` covers every release file except itself. The release workflow grants write permission only to the final job after the read-only compatibility job passes.
 
 ## Host matrix
 
-Every plugin release must run the real `compat-probe` against both hosts below with the plugin-capable Linux asset (`CLIProxyAPI_<version>_linux_<arch>.tar.gz`, never `_no-plugin`):
+Every plugin release must run the real `compat-probe` against all hosts below with the plugin-capable Linux asset (`CLIProxyAPI_<version>_linux_<arch>.tar.gz`, never `_no-plugin`):
 
 | Host | Required evidence |
 |---|---|
 | CLIProxyAPI `v7.2.133` | Candidate starts on a temporary loopback port, loads ABI 1/RPC 3, applies config, dispatches a mock-provider request, and emits exactly one Caveman marker. |
-| Exact approved latest stable | The same real dispatch plus config GET/PATCH/status and self-test. The fixed U2 candidate is `v7.2.137`, published on August 19, 2026; later promotion automation must resolve and pin its own reviewed exact tag. |
+| CLIProxyAPI `v7.2.137` | The same real dispatch plus config GET/PATCH/status and self-test. This is the fixed U2 compatibility baseline, published on August 19, 2026. |
+| Exact approved latest stable `v7.2.155` | The same real dispatch plus config GET/PATCH/status and self-test. This candidate exercises the host's RPC Schema 6 raw-management-response contract; later promotion automation must resolve and pin its own reviewed exact tag. |
 
 The Management API does not expose normalizer capabilities or their complete ordering. Production therefore also requires a manual config audit proving Token Saver has `priority: -100` and no enabled normalizer has a lower numeric priority. A plugin self-test alone is not host-dispatch evidence.
 
