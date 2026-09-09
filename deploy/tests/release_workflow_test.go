@@ -1257,7 +1257,7 @@ func TestReleaseWorkflowPublishesOnlyAfterReadOnlyCompatibility(t *testing.T) {
 	if !strings.Contains(compatibilityRun, "compat-probe") {
 		t.Fatal("read-only compatibility job must execute the downloaded candidate")
 	}
-	dispatch := requireNamedStep(t, compatibility, "Prove real host dispatch on baseline and fixed v7.2.137")
+	dispatch := requireNamedStep(t, compatibility, "Prove real host dispatch across the pinned compatibility matrix")
 	if !strings.Contains(dispatch.Run, `"$compat_probe" -candidate`) || !strings.Contains(dispatch.Run, "TestRealCandidate") {
 		t.Fatal("compatibility job must execute both compatibility probe and real host-dispatch tests")
 	}
@@ -1437,9 +1437,9 @@ func TestReleaseWorkflowUsesFreshImmutableBuildArtifact(t *testing.T) {
 	}
 	uploadPath := workflowValue(upload.With, "path")
 	for _, want := range []string{
-		"token-saver-v1.2.6-linux-amd64.so",
-		"compat-probe-v1.2.6-linux-amd64",
-		"update-verifier-v1.2.6-linux-amd64",
+		"token-saver-v1.2.7-linux-amd64.so",
+		"compat-probe-v1.2.7-linux-amd64",
+		"update-verifier-v1.2.7-linux-amd64",
 		"GLIBC_REQUIREMENTS.txt",
 		"release-metadata.json",
 		"SHA256SUMS",

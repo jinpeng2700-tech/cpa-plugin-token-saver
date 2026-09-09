@@ -41,7 +41,7 @@ future_field: preserved
 	if registration.SchemaVersion != abi.RPCSchemaVersion {
 		t.Fatalf("schema_version = %d", registration.SchemaVersion)
 	}
-	if registration.Metadata.Name != "Token Saver" || registration.Metadata.Version != "1.2.6" || registration.Metadata.Author != "Mr.King" {
+	if registration.Metadata.Name != "Token Saver" || registration.Metadata.Version != "1.2.7" || registration.Metadata.Author != "Mr.King" {
 		t.Fatalf("metadata = %#v", registration.Metadata)
 	}
 	if !registration.Capabilities.RequestNormalizer || !registration.Capabilities.ManagementAPI {
@@ -190,13 +190,37 @@ func TestRuntimeRegistrationAcceptsHostSchema5AndAdvertisesSchema3(t *testing.T)
 	}
 }
 
-func TestRuntimeRegistrationRejectsHostSchema6(t *testing.T) {
+func TestRuntimeRegistrationAcceptsHostSchema6AndAdvertisesSchema3(t *testing.T) {
 	runtimeState := abi.NewRuntime()
 	t.Cleanup(runtimeState.Shutdown)
 
 	rawRegister, registerStatus := runtimeState.Call(
 		abi.MethodPluginRegister,
 		lifecycleJSONForSchema(t, nil, 6),
+	)
+	if registerStatus != abi.CallStatusOK {
+		t.Fatalf("plugin.register status = %d, envelope = %s", registerStatus, rawRegister)
+	}
+	registerEnvelope := decodeEnvelope(t, rawRegister)
+	if !registerEnvelope.OK {
+		t.Fatalf("plugin.register envelope = %#v, want success envelope", registerEnvelope)
+	}
+	var registration abi.Registration
+	if errDecode := json.Unmarshal(registerEnvelope.Result, &registration); errDecode != nil {
+		t.Fatalf("decode registration: %v", errDecode)
+	}
+	if registration.SchemaVersion != 3 {
+		t.Fatalf("registration schema_version = %d, want 3", registration.SchemaVersion)
+	}
+}
+
+func TestRuntimeRegistrationRejectsHostSchema7(t *testing.T) {
+	runtimeState := abi.NewRuntime()
+	t.Cleanup(runtimeState.Shutdown)
+
+	rawRegister, registerStatus := runtimeState.Call(
+		abi.MethodPluginRegister,
+		lifecycleJSONForSchema(t, nil, 7),
 	)
 	if registerStatus != abi.CallStatusError {
 		t.Fatalf("plugin.register status = %d, want error", registerStatus)
@@ -208,7 +232,7 @@ func TestRuntimeRegistrationRejectsHostSchema6(t *testing.T) {
 	if registerEnvelope.Error.Code != "invalid_request" {
 		t.Fatalf("error code = %q, want invalid_request", registerEnvelope.Error.Code)
 	}
-	wantMessage := "RPC schema version 6 is not supported"
+	wantMessage := "RPC schema version 7 is not supported"
 	if registerEnvelope.Error.Message != wantMessage {
 		t.Fatalf("error message = %q, want %q", registerEnvelope.Error.Message, wantMessage)
 	}
